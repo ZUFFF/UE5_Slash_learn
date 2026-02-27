@@ -35,6 +35,9 @@ public:
 
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_Controller() override;
 
 	// Called to bind functionality to input
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -58,11 +61,11 @@ public:
 	FORCEINLINE float GetAO_Yaw() const { return AO_Yaw; }
 	FORCEINLINE float GetAO_Pitch() const { return AO_Pitch; }
 
-	// ¿ªÊ¼Í£¶Ù¶¯×÷
+	// ï¿½ï¿½Ê¼Í£ï¿½Ù¶ï¿½ï¿½ï¿½
 	UFUNCTION(BlueprintCallable)
 	void StartHitReaction();
 
-	// »Ö¸´¶¯×÷
+	// ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½
 	void ResumeAction();
 protected:
 	// Called when the game starts or when spawned
@@ -131,6 +134,15 @@ protected:
 
 	UFUNCTION(BlueprintCallable)
 	void DrawEnd();
+	
+	UFUNCTION(Server, Reliable)
+	void ServerRequestAttack();
+
+	UFUNCTION(Server, Reliable)
+	void ServerInteract();
+
+	void ExecuteAttackAuthority();
+	void ExecuteInteractAuthority();
 
 	bool bCanDisarm();
 	bool bCanArm();
@@ -176,19 +188,19 @@ private:
 	UPROPERTY(EditAnywhere)
 	float RunSpeed = 500.f;
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Replicated, meta = (AllowPrivateAccess = "true"))
 	ECharacterState CharacterState = ECharacterState::ECS_Unequipped;
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Replicated, meta = (AllowPrivateAccess = "true"))
 	ECharacterMoveState MoveState = ECharacterMoveState::ECMS_Unlocked;
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Replicated, meta = (AllowPrivateAccess = "true"))
 	EActionState ActionState = EActionState::EAS_Unoccupied;
 
 	UPROPERTY(BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
 	ETurningInPlace TurningInPlace = ETurningInPlace::ETIP_NotTurning;
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Replicated, meta = (AllowPrivateAccess = "true"))
 	EBowState BowState = EBowState::EBS_NotUsingBow;
 
 	UPROPERTY(VisibleAnywhere)
@@ -218,7 +230,7 @@ private:
 	UPROPERTY(EditAnywhere)
 	UStaticMeshComponent* AttachedProjectile;
 
-	UPROPERTY()
+	UPROPERTY(VisibleAnywhere, Category ="Actor Attributes")
 	USlashOverlap* SlashOverlay;
 
 	UPROPERTY()

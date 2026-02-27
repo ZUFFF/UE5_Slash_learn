@@ -19,6 +19,7 @@ public:
 protected:
 	// Called when the game starts
 	virtual void BeginPlay() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 public:	
 	// Called every frame
@@ -28,23 +29,23 @@ public:
 
 private:
 	// Current Health
-	UPROPERTY(EditAnywhere,Category = "Actor Attributes")
+	UPROPERTY(EditAnywhere, ReplicatedUsing = OnRep_Health, Category = "Actor Attributes")
 	float Health = 100.f;
 
-	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
+	UPROPERTY(EditAnywhere, Replicated, Category = "Actor Attributes")
 	float MaxHealth = 100.f;
 
-	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
+	UPROPERTY(EditAnywhere, ReplicatedUsing = OnRep_Stamina, Category = "Actor Attributes")
 	float Stamina = 100.f;
 
-	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
+	UPROPERTY(EditAnywhere, Replicated, Category = "Actor Attributes")
 	float MaxStamina = 100.f;
 
-	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
-	int32 Gold;
+	UPROPERTY(EditAnywhere, ReplicatedUsing = OnRep_Gold, Category = "Actor Attributes")
+	int32 Gold = 0;
 
-	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
-	int32 Souls;
+	UPROPERTY(EditAnywhere, ReplicatedUsing = OnRep_Souls, Category = "Actor Attributes")
+	int32 Souls = 0;
 
 	UPROPERTY(EditAnywhere, Category = "Actor Attributes")
 	int32 DodgeCost = 14.f;
@@ -59,10 +60,23 @@ public:
 	float GetStaminaPercent();
 		
 	bool IsAlive();
-	void AddSouls(int32 NumberOfSouls) { Souls += NumberOfSouls; }
-	void AddGold(int32 AmountOfGold) { Gold += AmountOfGold; }
+	void AddSouls(int32 NumberOfSouls);
+	void AddGold(int32 AmountOfGold);
 	FORCEINLINE int32 GetGold() const { return Gold; }
 	FORCEINLINE int32 GetSouls() const { return Souls; }
 	FORCEINLINE int32 GetDodgeCost() const { return DodgeCost; }
 	FORCEINLINE int32 GetStamina() const { return Stamina; }
+
+private:
+	UFUNCTION()
+	void OnRep_Health(float LastHealth);
+
+	UFUNCTION()
+	void OnRep_Stamina(float LastStamina);
+
+	UFUNCTION()
+	void OnRep_Gold(int32 LastGold);
+
+	UFUNCTION()
+	void OnRep_Souls(int32 LastSouls);
 };

@@ -25,6 +25,7 @@
 #include "HUD/SlashHUD.h"
 #include "Weapons/Projectile.h"
 #include "SlashAnimInstance.h"
+#include "Net/UnrealNetwork.h"
 
 
 // Sets default values
@@ -147,10 +148,10 @@ void ASlashCharacter::AimOffset(float DeltaTime)
 
 void ASlashCharacter::StartHitReaction()
 {
-	// Í£¶Ù¶¯×÷µÄ³ÖÐøÊ±¼ä£¨Ãë£©
+	// Í£ï¿½Ù¶ï¿½ï¿½ï¿½ï¿½Ä³ï¿½ï¿½ï¿½Ê±ï¿½ä£¨ï¿½ë£©
 	
 
-	// ÔÝÍ£¶¯×÷
+	// ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½
 	//APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
 	//if (PlayerController)
 	//{
@@ -158,27 +159,27 @@ void ASlashCharacter::StartHitReaction()
 	//	PlayerController->SetIgnoreMoveInput(true);
 	//}
 	// 
-	// Èç¹û¼ÆÊ±Æ÷ÈÔÔÚÔËÐÐ£¬ÖÐÖ¹Ëü
+	// ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½Ö¹ï¿½ï¿½
 	GetWorldTimerManager().ClearTimer(HitReactionTimer);
 
-	// ÉèÖÃ¼ÆÊ±Æ÷£¬ÓÃÓÚÔÚÒ»¶ÎÊ±¼äºó»Ö¸´¶¯×÷
+	// ï¿½ï¿½ï¿½Ã¼ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½Ê±ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½
 	GetWorldTimerManager().SetTimer(HitReactionTimer, this, &ASlashCharacter::ResumeAction, HitReactionDuration, false);
 
-	// »ñÈ¡¶¯»­ÊµÀý
+	// ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
 	if (AnimInstance)
 	{
-		// ±£´æÔ­Ê¼¶¯»­²¥·ÅËÙ¶È
+		// ï¿½ï¿½ï¿½ï¿½Ô­Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù¶ï¿½
 		OriginalAnimationSpeed = AnimInstance->Montage_GetPlayRate(AttackMontage);
 
-		// ¼õ»º¶¯»­²¥·ÅËÙ¶È
+		// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù¶ï¿½
 		AnimInstance->Montage_SetPlayRate(AttackMontage, 0.05f);
 	}
 }
 
 void ASlashCharacter::ResumeAction()
 {
-	// »Ö¸´Ô­Ê¼¶¯»­²¥·ÅËÙ¶È
+	// ï¿½Ö¸ï¿½Ô­Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù¶ï¿½
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
 	if (AnimInstance)
 	{
@@ -189,13 +190,56 @@ void ASlashCharacter::ResumeAction()
 // Called when the game starts or when spawned
 void ASlashCharacter::BeginPlay()
 {
+
+
 	Super::BeginPlay();
+	const FString NetModeStr = ToString(GetNetMode()); // ENetMode ç”¨ ToString
+	const FString RoleStr = UEnum::GetValueAsString(TEXT("Engine.ENetRole"), GetLocalRole());
+
+	UE_LOG(LogTemp, Warning, TEXT("[ç½‘ç»œè°ƒè¯•][PID=%d][ä¸–ç•Œ=%s][è§’è‰²=%s] æ¨¡å¼=%s è§’è‰²æƒé™=%s Auth=%d æœ¬åœ°æŽ§åˆ¶=%d æŽ§åˆ¶å™¨=%s"),
+	FPlatformProcess::GetCurrentProcessId(),
+	*GetWorld()->GetName(),
+	*GetName(),
+	*ToString(GetNetMode()),
+	*UEnum::GetValueAsString(TEXT("Engine.ENetRole"), GetLocalRole()),
+	HasAuthority() ? 1 : 0,
+	IsLocallyControlled() ? 1 : 0,
+	*GetNameSafe(GetController()));
 	InitializeSlashOverlay();
 	Tags.Add(FName("EngageableTarget"));
 	FAttachmentTransformRules TransformRules(EAttachmentRule::SnapToTarget, true);
 	AttachedProjectile->AttachToComponent(GetMesh(), TransformRules, FName("RightIndexSocket"));
 	FindNearestEnemy();
 
+}
+
+void ASlashCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASlashCharacter, CharacterState);
+	DOREPLIFETIME(ASlashCharacter, MoveState);
+	DOREPLIFETIME(ASlashCharacter, ActionState);
+	DOREPLIFETIME(ASlashCharacter, BowState);
+}
+
+void ASlashCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	UE_LOG(LogTemp, Warning, TEXT("[æŽ§åˆ¶é“¾][PossessedBy][PID=%d][%s] æŽ§åˆ¶å™¨=%s"),
+		FPlatformProcess::GetCurrentProcessId(),
+		*GetName(),
+		*GetNameSafe(NewController));
+	InitializeSlashOverlay();
+}
+
+void ASlashCharacter::OnRep_Controller()
+{
+	Super::OnRep_Controller();
+	UE_LOG(LogTemp, Warning, TEXT("[æŽ§åˆ¶é“¾][OnRep_Controller][PID=%d][%s] æŽ§åˆ¶å™¨=%s"),
+		FPlatformProcess::GetCurrentProcessId(),
+		*GetName(),
+		*GetNameSafe(GetController()));
+	InitializeSlashOverlay();
 }
 
 void ASlashCharacter::InitializeSlashOverlay()
@@ -253,21 +297,13 @@ void ASlashCharacter::Look(const FInputActionValue& Value)
 
 void ASlashCharacter::EKeyPressed(const FInputActionValue& Value)
 {
-	AWeapon* OverlappingWeapon = Cast<AWeapon>(OverlappingItem);
-	if (OverlappingWeapon)
+	if (HasAuthority())
 	{
-		EquipWeapon(OverlappingWeapon);
+		ExecuteInteractAuthority();
 	}
 	else
 	{
-		if (bCanDisarm())
-		{
-			Disarm();
-		}
-		else if (bCanArm())
-		{
-			Arm();
-		}
+		ServerInteract();
 	}
 }
 
@@ -368,6 +404,40 @@ void ASlashCharacter::AimButtonReleased(const FInputActionValue& Value)
 void ASlashCharacter::Attack(const FInputActionValue& Value)
 {
 	Super::Attack(Value);
+	// if (CanAttack())
+	// {
+	// 	FindNearestEnemy();
+	// 	ActionState = EActionState::EAS_Attacking;
+	// 	PlayAttackMontage();
+	// }
+	// else if (CanShoot())
+	// {
+	// 	PlayShootMontage();
+	// 	BowState = EBowState::EBS_Shooting;
+	// 	EquippedWeapon->Fire(HitTarget, GetMesh(), FName("RightIndexSocket"));
+	// 	if (AttachedProjectile)AttachedProjectile->SetVisibility(false);
+	// }
+	if (HasAuthority())
+	{
+		ExecuteAttackAuthority();
+	}
+	else
+	{
+		ServerRequestAttack();
+	}
+}
+void ASlashCharacter::ServerRequestAttack_Implementation()
+{
+	ExecuteAttackAuthority();
+}
+
+void ASlashCharacter::ServerInteract_Implementation()
+{
+	ExecuteInteractAuthority();
+}
+
+void ASlashCharacter::ExecuteAttackAuthority()
+{
 	if (CanAttack())
 	{
 		FindNearestEnemy();
@@ -379,10 +449,29 @@ void ASlashCharacter::Attack(const FInputActionValue& Value)
 		PlayShootMontage();
 		BowState = EBowState::EBS_Shooting;
 		EquippedWeapon->Fire(HitTarget, GetMesh(), FName("RightIndexSocket"));
-		if (AttachedProjectile)AttachedProjectile->SetVisibility(false);
+		if (AttachedProjectile) AttachedProjectile->SetVisibility(false);
 	}
 }
 
+void ASlashCharacter::ExecuteInteractAuthority()
+{
+	AWeapon* OverlappingWeapon = Cast<AWeapon>(OverlappingItem);
+	if (OverlappingWeapon)
+	{
+		EquipWeapon(OverlappingWeapon);
+	}
+	else
+	{
+		if (bCanDisarm())
+		{
+			Disarm();
+		}
+		else if (bCanArm())
+		{
+			Arm();
+		}
+	}
+}
 void ASlashCharacter::WallRun(const FInputActionValue& Value)
 {
 }
@@ -617,7 +706,10 @@ void ASlashCharacter::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	if (Attributes && SlashOverlay)
 	{
-		Attributes->RegenStamina(DeltaTime);
+		if (HasAuthority())
+		{
+			Attributes->RegenStamina(DeltaTime);
+		}
 		SlashOverlay->SetHealthBarPercent(Attributes->GetHealthPercent());
 		SlashOverlay->SetStaminaPercent(Attributes->GetStaminaPercent());
 	}

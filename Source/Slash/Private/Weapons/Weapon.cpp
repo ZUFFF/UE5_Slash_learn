@@ -13,11 +13,14 @@
 
 AWeapon::AWeapon()
 {
+	bReplicates = true;
+	SetReplicateMovement(true);
+
 	WeaponBox = CreateDefaultSubobject<UBoxComponent>(TEXT("Weapon Box"));
 	WeaponBox->SetupAttachment(GetRootComponent());
 	WeaponBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	WeaponBox->SetCollisionResponseToAllChannels(ECollisionResponse::ECR_Overlap);
-	WeaponBox->SetCollisionResponseToChannel(ECollisionChannel::ECC_Pawn, ECollisionResponse::ECR_Ignore);
+	WeaponBox->SetCollisionResponseToChannel(ECollisionChannel::ECC_Pawn, ECollisionResponse::ECR_Overlap);
 
 	BoxTraceStart = CreateDefaultSubobject<USceneComponent>(TEXT("Box Trace Start"));
 	BoxTraceStart->SetupAttachment(GetRootComponent());
@@ -98,6 +101,7 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 	//	ExecuteGetHit(BoxHit);
 	//	CreateFields(BoxHit.ImpactPoint);
 	//}
+	if (!HasAuthority()) return;
 	if (OtherActor == GetOwner() || ActorIsSameType(OtherActor)) return;
 	WeaponBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CreateFields(GetActorLocation());

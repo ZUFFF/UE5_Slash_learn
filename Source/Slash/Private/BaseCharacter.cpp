@@ -7,6 +7,7 @@
 #include "AttributeComponents.h"
 #include "Components/CapsuleComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Net/UnrealNetwork.h"
 // Sets default values
 ABaseCharacter::ABaseCharacter()
 {
@@ -23,6 +24,12 @@ void ABaseCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+}
+
+void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ABaseCharacter, EquippedWeapon);
 }
 
 void ABaseCharacter::GetHit_Implementation(const FVector& ImpactPoint, AActor* Hitter)
@@ -139,6 +146,9 @@ void ABaseCharacter::HandleDamage(float DamageAmount)
 	{
 		Attributes->ReceiveDamage(DamageAmount);
 	}
+	UE_LOG(LogTemp, Warning, TEXT("[伤害结算][%s] Auth=%d HP%%=%.2f"),
+	*GetName(), HasAuthority() ? 1 : 0, Attributes ? Attributes->GetHealthPercent() : -1.f);
+
 }
 
 void ABaseCharacter::PlayMontageSection(UAnimMontage* Montage, const FName& SectionName)

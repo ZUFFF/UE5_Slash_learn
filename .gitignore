@@ -1,0 +1,20 @@
+# Ignore everything by default
+*
+
+# Keep directories visible so whitelist rules can match recursively
+!*/
+
+# Keep only repository root .gitignore tracked
+!/.gitignore
+
+# Keep all source code
+!Source/
+!Source/**
+
+# Keep any directory named "Blueprints" and everything inside it
+!**/Blueprints/
+!**/Blueprints/**
+
+# But still ignore generated/cache trees even if they contain Blueprints
+Saved/
+Intermediate/

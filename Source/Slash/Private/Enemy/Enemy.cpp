@@ -130,6 +130,12 @@ void AEnemy::CancelSelect()
 void AEnemy::BeginPlay()
 {
 	Super::BeginPlay();
+	const FString NetModeStr = ToString(GetNetMode()); // ENetMode 用 ToString
+	const FString RoleStr = UEnum::GetValueAsString(TEXT("Engine.ENetRole"), GetLocalRole());
+
+	UE_LOG(LogTemp, Warning, TEXT("[网络调试][敌人=%s] 模式=%s 角色权限=%s Auth=%d"),
+		*GetName(), *NetModeStr, *RoleStr, HasAuthority() ? 1 : 0);
+
 
 	if (PawnSensing) PawnSensing->OnSeePawn.AddDynamic(this, &AEnemy::PawnSeen);
 	InitializeEnemy();

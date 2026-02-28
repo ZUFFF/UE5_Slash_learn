@@ -141,8 +141,32 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void ServerInteract();
 
+	UFUNCTION(Server, Reliable)
+	void ServerRequestDodge();
+
+	UFUNCTION(Server, Reliable)
+	void ServerToggleLock();
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetAiming(bool bNewAiming);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayAttackMontage();
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayShootMontage();
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayDodgeMontage();
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayEquipMontage(FName SectionName);
+
 	void ExecuteAttackAuthority();
 	void ExecuteInteractAuthority();
+	void ExecuteDodgeAuthority();
+	void ExecuteToggleLockAuthority();
+	void ExecuteSetAimingAuthority(bool bNewAiming);
 
 	bool bCanDisarm();
 	bool bCanArm();

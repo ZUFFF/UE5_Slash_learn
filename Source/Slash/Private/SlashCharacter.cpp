@@ -100,6 +100,8 @@ void ASlashCharacter::SetOverlappingItem(AMyItem* Item)
 
 void ASlashCharacter::AddSouls(ASoul* Soul)
 {
+	if (!HasAuthority()) return;
+
 	if (Attributes && SlashOverlay)
 	{
 		Attributes->AddSouls(Soul->GetSouls());
@@ -109,6 +111,8 @@ void ASlashCharacter::AddSouls(ASoul* Soul)
 
 void ASlashCharacter::AddGold(ATreasure* Treasure)
 {
+	if (!HasAuthority()) return;
+
 	if (Attributes && SlashOverlay)
 	{
 		Attributes->AddGold(Treasure->GetGold());
@@ -309,19 +313,13 @@ void ASlashCharacter::EKeyPressed(const FInputActionValue& Value)
 
 void ASlashCharacter::Dodge(const FInputActionValue& Value)
 {
-	if (ActionState != EActionState::EAS_Unoccupied)return;
-	if (Attributes && Attributes->GetStamina() > Attributes->GetDodgeCost())
+	if (HasAuthority())
 	{
-		ActionState = EActionState::EAS_Dodge;
-		GetCharacterMovement()->Velocity;
-		FRotator NewRotation = UKismetMathLibrary::Conv_VectorToRotator(GetCharacterMovement()->GetLastInputVector()); 
-		SetActorRotation(NewRotation);
-		PlayDodgeMontage();
-		Attributes->UseStamina(Attributes->GetDodgeCost());
-		if (SlashOverlay)
-		{
-			SlashOverlay->SetStaminaPercent(Attributes->GetStaminaPercent());
-		}
+		ExecuteDodgeAuthority();
+	}
+	else
+	{
+		ServerRequestDodge();
 	}
 }
 
@@ -341,43 +339,25 @@ void ASlashCharacter::ChangeToUnlockedControl()
 
 void ASlashCharacter::Lock(const FInputActionValue& Value)
 {
-	if (MoveState == ECharacterMoveState::ECMS_Unlocked)
+	if (HasAuthority())
 	{
-		MoveState = ECharacterMoveState::ECMS_Locked;
-		ChangeToLockedControl();
-		if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
-		{
-			PlayerController->SetIgnoreLookInput(true);
-		}
-		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
-		FindNearestEnemy();
+		ExecuteToggleLockAuthority();
 	}
-	else if (MoveState == ECharacterMoveState::ECMS_Locked)
+	else
 	{
-		MoveState = ECharacterMoveState::ECMS_Unlocked;
-		ChangeToUnlockedControl();
-		if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
-		{
-			Controller->SetIgnoreLookInput(false);
-		}
-		if (LockedEnemy)
-		{
-			LockedEnemy->CancelSelect();
-		}
-		NearestEnemy = nullptr;
-		LockedEnemy = nullptr;
-		GetCharacterMovement()->MaxWalkSpeed = RunSpeed;
+		ServerToggleLock();
 	}
 }
 
 void ASlashCharacter::AimButtonPressed(const FInputActionValue& Value)
 {
-	if (CharacterState == ECharacterState::ECS_EquippedBow)
+	if (HasAuthority())
 	{
-		MoveState = ECharacterMoveState::ECMS_Aiming;
-		BowState = EBowState::EBS_Aiming;
-		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
-		//ChangeToLockedControl();
+		ExecuteSetAimingAuthority(true);
+	}
+	else
+	{
+		ServerSetAiming(true);
 	}
 }
 
@@ -390,14 +370,15 @@ void ASlashCharacter::DrawArrow()
 
 void ASlashCharacter::AimButtonReleased(const FInputActionValue& Value)
 {
-	if (CharacterState == ECharacterState::ECS_EquippedBow)
+	if (HasAuthority())
 	{
-		MoveState = ECharacterMoveState::ECMS_Unlocked;
-		ActionState = EActionState::EAS_Unoccupied;
-		BowState = EBowState::EBS_NotUsingBow;
-		ChangeToUnlockedControl();
-		GetCharacterMovement()->MaxWalkSpeed = RunSpeed;
+		ExecuteSetAimingAuthority(false);
 	}
+	else
+	{
+		ServerSetAiming(false);
+	}
+
 	AttachedProjectile->SetVisibility(false);
 }
 
@@ -431,6 +412,21 @@ void ASlashCharacter::ServerRequestAttack_Implementation()
 	ExecuteAttackAuthority();
 }
 
+void ASlashCharacter::ServerRequestDodge_Implementation()
+{
+	ExecuteDodgeAuthority();
+}
+
+void ASlashCharacter::ServerToggleLock_Implementation()
+{
+	ExecuteToggleLockAuthority();
+}
+
+void ASlashCharacter::ServerSetAiming_Implementation(bool bNewAiming)
+{
+	ExecuteSetAimingAuthority(bNewAiming);
+}
+
 void ASlashCharacter::ServerInteract_Implementation()
 {
 	ExecuteInteractAuthority();
@@ -442,14 +438,113 @@ void ASlashCharacter::ExecuteAttackAuthority()
 	{
 		FindNearestEnemy();
 		ActionState = EActionState::EAS_Attacking;
-		PlayAttackMontage();
+		MulticastPlayAttackMontage();
 	}
 	else if (CanShoot())
 	{
-		PlayShootMontage();
+		MulticastPlayShootMontage();
 		BowState = EBowState::EBS_Shooting;
 		EquippedWeapon->Fire(HitTarget, GetMesh(), FName("RightIndexSocket"));
 		if (AttachedProjectile) AttachedProjectile->SetVisibility(false);
+	}
+}
+
+void ASlashCharacter::ExecuteDodgeAuthority()
+{
+	if (ActionState != EActionState::EAS_Unoccupied) return;
+	if (!(Attributes && Attributes->GetStamina() > Attributes->GetDodgeCost())) return;
+
+	ActionState = EActionState::EAS_Dodge;
+	const FVector LastInput = GetCharacterMovement()->GetLastInputVector();
+	if (!LastInput.IsNearlyZero())
+	{
+		const FRotator NewRotation = UKismetMathLibrary::Conv_VectorToRotator(LastInput);
+		SetActorRotation(NewRotation);
+	}
+	Attributes->UseStamina(Attributes->GetDodgeCost());
+	MulticastPlayDodgeMontage();
+}
+
+void ASlashCharacter::ExecuteToggleLockAuthority()
+{
+	if (MoveState == ECharacterMoveState::ECMS_Unlocked)
+	{
+		MoveState = ECharacterMoveState::ECMS_Locked;
+		ChangeToLockedControl();
+		if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+		{
+			PlayerController->SetIgnoreLookInput(true);
+		}
+		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+		FindNearestEnemy();
+	}
+	else if (MoveState == ECharacterMoveState::ECMS_Locked)
+	{
+		MoveState = ECharacterMoveState::ECMS_Unlocked;
+		ChangeToUnlockedControl();
+		if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+		{
+			PlayerController->SetIgnoreLookInput(false);
+		}
+		if (LockedEnemy)
+		{
+			LockedEnemy->CancelSelect();
+		}
+		NearestEnemy = nullptr;
+		LockedEnemy = nullptr;
+		GetCharacterMovement()->MaxWalkSpeed = RunSpeed;
+	}
+}
+
+void ASlashCharacter::ExecuteSetAimingAuthority(bool bNewAiming)
+{
+	if (CharacterState != ECharacterState::ECS_EquippedBow) return;
+
+	if (bNewAiming)
+	{
+		MoveState = ECharacterMoveState::ECMS_Aiming;
+		BowState = EBowState::EBS_Aiming;
+		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+	}
+	else
+	{
+		MoveState = ECharacterMoveState::ECMS_Unlocked;
+		ActionState = EActionState::EAS_Unoccupied;
+		BowState = EBowState::EBS_NotUsingBow;
+		ChangeToUnlockedControl();
+		GetCharacterMovement()->MaxWalkSpeed = RunSpeed;
+	}
+}
+
+void ASlashCharacter::MulticastPlayAttackMontage_Implementation()
+{
+	if (ActionState != EActionState::EAS_Dead)
+	{
+		PlayAttackMontage();
+	}
+}
+
+void ASlashCharacter::MulticastPlayShootMontage_Implementation()
+{
+	if (ActionState != EActionState::EAS_Dead)
+	{
+		PlayShootMontage();
+	}
+}
+
+void ASlashCharacter::MulticastPlayDodgeMontage_Implementation()
+{
+	if (ActionState != EActionState::EAS_Dead)
+	{
+		PlayDodgeMontage();
+	}
+}
+
+void ASlashCharacter::MulticastPlayEquipMontage_Implementation(FName SectionName)
+{
+	if (ActionState != EActionState::EAS_Dead)
+	{
+		PlayEquipMontage(SectionName);
 	}
 }
 
@@ -519,6 +614,7 @@ bool ASlashCharacter::CanShoot()
 
 void ASlashCharacter::AttackFinish()
 {
+	if (!HasAuthority()) return;
 	ActionState = EActionState::EAS_AttackFinish;
 }
 
@@ -617,17 +713,20 @@ void ASlashCharacter::FindNearestEnemy()
 
 void ASlashCharacter::AttackEnd()
 {
+	if (!HasAuthority()) return;
 	ActionState = EActionState::EAS_Unoccupied;
 }
 
 void ASlashCharacter::DodgeEnd()
 {
+	if (!HasAuthority()) return;
 	Super::DodgeEnd();
 	ActionState = EActionState::EAS_Unoccupied;
 }
 
 void ASlashCharacter::ShootEnd()
 {
+	if (!HasAuthority()) return;
 	BowState = EBowState::EBS_Aiming;
 }
 
@@ -638,11 +737,13 @@ void ASlashCharacter::AttachArrow()
 
 void ASlashCharacter::DrawEnd()
 {
+	if (!HasAuthority()) return;
 	BowState = EBowState::EBS_Ready;
 }
 
 void ASlashCharacter::FinishEquipping()
 {
+	if (!HasAuthority()) return;
 	ActionState = EActionState::EAS_Unoccupied;
 }
 void ASlashCharacter::AttachWeaponToBack()
@@ -668,17 +769,19 @@ void ASlashCharacter::AttachWeaponToHand()
 }
 void ASlashCharacter::HitReactEnd()
 {
+	if (!HasAuthority()) return;
 	ActionState = EActionState::EAS_Unoccupied;
 }
 void ASlashCharacter::Disarm()
 {
+	if (!EquippedWeapon) return;
 	if (EquippedWeapon->WeaponType == EWeaponType::EWT_ShortSword || EquippedWeapon->WeaponType == EWeaponType::EWT_LongSword)
 	{
-		PlayEquipMontage(FName("Unequip"));
+		MulticastPlayEquipMontage(FName("Unequip"));
 	}
 	else if (EquippedWeapon->WeaponType == EWeaponType::EWT_Bow)
 	{
-		PlayEquipMontage(FName("UnequipBow"));
+		MulticastPlayEquipMontage(FName("UnequipBow"));
 	}
 	CharacterState = ECharacterState::ECS_Unequipped;
 	ActionState = EActionState::EAS_EquippingWeapon;
@@ -687,14 +790,15 @@ void ASlashCharacter::Disarm()
 
 void ASlashCharacter::Arm()
 {
+	if (!EquippedWeapon) return;
 	if (EquippedWeapon->WeaponType == EWeaponType::EWT_ShortSword || EquippedWeapon->WeaponType == EWeaponType::EWT_LongSword)
 	{
-		PlayEquipMontage(FName("Equip"));
+		MulticastPlayEquipMontage(FName("Equip"));
 		CharacterState = ECharacterState::ECS_EquippedOneHandedWeapon;
 	}
 	else if (EquippedWeapon->WeaponType == EWeaponType::EWT_Bow)
 	{
-		PlayEquipMontage(FName("EquipBow"));
+		MulticastPlayEquipMontage(FName("EquipBow"));
 		CharacterState = ECharacterState::ECS_EquippedBow;
 	}
 	ActionState = EActionState::EAS_EquippingWeapon;
@@ -712,6 +816,8 @@ void ASlashCharacter::Tick(float DeltaTime)
 		}
 		SlashOverlay->SetHealthBarPercent(Attributes->GetHealthPercent());
 		SlashOverlay->SetStaminaPercent(Attributes->GetStaminaPercent());
+		SlashOverlay->SetGold(Attributes->GetGold());
+		SlashOverlay->SetSouls(Attributes->GetSouls());
 	}
 	
 	if (MoveState == ECharacterMoveState::ECMS_Locked)
@@ -740,12 +846,14 @@ void ASlashCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EnhancedInputComponent->BindAction(MovementAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Move);
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Look);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Jump);
-		EnhancedInputComponent->BindAction(EKeyAction, ETriggerEvent::Triggered, this, &ASlashCharacter::EKeyPressed);
-		EnhancedInputComponent->BindAction(DodgeAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Dodge);
-		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Attack);
-		EnhancedInputComponent->BindAction(LockAction, ETriggerEvent::Triggered, this, &ASlashCharacter::Lock);
-		EnhancedInputComponent->BindAction(AimStartAction, ETriggerEvent::Triggered, this, &ASlashCharacter::AimButtonPressed);
-		EnhancedInputComponent->BindAction(AimEndAction, ETriggerEvent::Triggered, this, &ASlashCharacter::AimButtonReleased);
+		// Interact should fire once per key press, otherwise Triggered can spam ServerInteract every frame.
+		EnhancedInputComponent->BindAction(EKeyAction, ETriggerEvent::Started, this, &ASlashCharacter::EKeyPressed);
+		EnhancedInputComponent->BindAction(DodgeAction, ETriggerEvent::Started, this, &ASlashCharacter::Dodge);
+		// Attack should fire once per click to avoid spamming server RPC every frame.
+		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Started, this, &ASlashCharacter::Attack);
+		EnhancedInputComponent->BindAction(LockAction, ETriggerEvent::Started, this, &ASlashCharacter::Lock);
+		EnhancedInputComponent->BindAction(AimStartAction, ETriggerEvent::Started, this, &ASlashCharacter::AimButtonPressed);
+		EnhancedInputComponent->BindAction(AimEndAction, ETriggerEvent::Started, this, &ASlashCharacter::AimButtonReleased);
 		EnhancedInputComponent->BindAction(WallRunAction, ETriggerEvent::Triggered, this, &ASlashCharacter::WallRun);
 	}
 

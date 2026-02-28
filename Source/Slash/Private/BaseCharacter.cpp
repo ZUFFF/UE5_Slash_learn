@@ -34,12 +34,31 @@ void ABaseCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 
 void ABaseCharacter::GetHit_Implementation(const FVector& ImpactPoint, AActor* Hitter)
 {
-	if (IsAlive() && Hitter)
+	const bool bCanReact = IsAlive() && Hitter != nullptr;
+	const FVector HitterLocation = Hitter ? Hitter->GetActorLocation() : GetActorLocation();
+
+	if (HasAuthority())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("DirectionalHitReact"));
-		DirectionalHitReact(Hitter->GetActorLocation());
+		MulticastPlayHitReaction(ImpactPoint, HitterLocation, bCanReact);
 	}
-	else Die();
+	else
+	{
+		// Standalone/local fallback.
+		MulticastPlayHitReaction_Implementation(ImpactPoint, HitterLocation, bCanReact);
+	}
+
+	if (!bCanReact)
+	{
+		Die();
+	}
+}
+
+void ABaseCharacter::MulticastPlayHitReaction_Implementation(const FVector_NetQuantize& ImpactPoint, const FVector_NetQuantize& HitterLocation, bool bCanReact)
+{
+	if (bCanReact)
+	{
+		DirectionalHitReact(HitterLocation);
+	}
 
 	PlayHitSound(ImpactPoint);
 	SpawnHitParticles(ImpactPoint);

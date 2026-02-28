@@ -17,6 +17,7 @@ class SLASH_API ABreakableActor : public AActor, public IHitInterface
 public:
 	ABreakableActor();
 	virtual void Tick(float DeltaTime) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	virtual void GetHit_Implementation(const FVector& ImpactPoint,  AActor* Hitter) override;
 
@@ -34,5 +35,11 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Breakable Properties")
 	TArray<TSubclassOf<class ATreasure>> TreasureClasses;
 
+	UPROPERTY(ReplicatedUsing = OnRep_Broken)
 	bool bBroken = false;
+
+	UFUNCTION()
+	void OnRep_Broken();
+
+	void ApplyBrokenState();
 };

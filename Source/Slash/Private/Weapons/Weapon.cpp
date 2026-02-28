@@ -104,7 +104,8 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 	if (!HasAuthority()) return;
 	if (OtherActor == GetOwner() || ActorIsSameType(OtherActor)) return;
 	WeaponBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	CreateFields(GetActorLocation());
+	const FVector FieldLocation = SweepResult.bBlockingHit ? SweepResult.ImpactPoint : GetActorLocation();
+	MulticastCreateFields(FieldLocation);
 	UGameplayStatics::ApplyDamage(OtherActor, Damage, GetInstigator()->GetController(), this, UDamageType::StaticClass());
 	ExecuteGetHit(OtherActor);
 	if (GetOwner()->ActorHasTag(TEXT("EngageableTarget")))
@@ -114,6 +115,11 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 	}
 	
 
+}
+
+void AWeapon::MulticastCreateFields_Implementation(const FVector_NetQuantize& FieldLocation)
+{
+	CreateFields(FVector(FieldLocation));
 }
 
 bool AWeapon::ActorIsSameType(AActor* OtherActor)

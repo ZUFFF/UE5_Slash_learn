@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "Enemy/Enemy.h"
@@ -13,6 +13,8 @@
 #include "AttributeComponents.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "AIController.h"
+#include "BrainComponent.h"
+#include "AI/EnemyAIController.h"
 #include "Soul.h"
 #include "Weapons/Weapon.h"
 #include "Slash/Slash.h"
@@ -42,12 +44,42 @@ AEnemy::AEnemy()
 	PawnSensing = CreateDefaultSubobject<UPawnSensingComponent>(TEXT("PawnSensing"));
 	PawnSensing->SightRadius = 4000.f;
 	PawnSensing->SetPeripheralVisionAngle(45.f);
+
+	AIControllerClass = AEnemyAIController::StaticClass();
+	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
+	EnemyState = EEnemyState::EES_NoState;
+}
+
+void AEnemy::SetEnemyState(EEnemyState NewState, const TCHAR* Reason)
+{
+	if (EnemyState == NewState) return;
+
+	if (bEnableAIStateLog)
+	{
+		const UEnum* EnemyStateEnum = StaticEnum<EEnemyState>();
+		const FString OldState = EnemyStateEnum ? EnemyStateEnum->GetNameStringByValue(static_cast<int64>(EnemyState)) : TEXT("Unknown");
+		const FString NextState = EnemyStateEnum ? EnemyStateEnum->GetNameStringByValue(static_cast<int64>(NewState)) : TEXT("Unknown");
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[AI鐘舵€乚[%s] %s -> %s 鍘熷洜=%s NetMode=%s"),
+			*GetName(),
+			*OldState,
+			*NextState,
+			Reason ? Reason : TEXT("Unknown"),
+			*ToString(GetNetMode())
+		);
+	}
+
+	EnemyState = NewState;
 }
 
 void AEnemy::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	if (IsDead()) return;
+	if (IsUsingBehaviorTree()) return;
+
 	if (EnemyState > EEnemyState::EES_Patrolling)
 	{
 		CheckCombatTarget();
@@ -61,7 +93,22 @@ void AEnemy::Tick(float DeltaTime)
 float AEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
 	HandleDamage(DamageAmount);
-	CombatTarget = EventInstigator->GetPawn();
+
+	if (EventInstigator)
+	{
+		CombatTarget = EventInstigator->GetPawn();
+	}
+
+	if (IsUsingBehaviorTree())
+	{
+		ShowHealthBar();
+		if (CombatTarget && !IsDead())
+		{
+			EnterChasingStateFromBT();
+		}
+		return DamageAmount;
+	}
+
 	if (IsInsideAttackRadius())
 	{
 		EnemyState = EEnemyState::EES_Attacking;
@@ -83,13 +130,19 @@ void AEnemy::Destroyed()
 
 void AEnemy::GetHit_Implementation(const FVector& ImpactPoint, AActor* Hitter)
 {
+	if (IsDead()) return;
+
 	UE_LOG(LogTemp, Warning, TEXT("enemy's gethit being called"));
 	Super::GetHit_Implementation(ImpactPoint, Hitter);
+	if (IsDead()) return;
 	if(!IsDead())ShowHealthBar();
 	ClearPatrolTimer();
 	ClearAttackTimer();
 	SetWeaponCollisionEnabled(ECollisionEnabled::NoCollision);
 	StopAttackMontage();
+
+	if (IsUsingBehaviorTree()) return;
+
 	if (IsInsideAttackRadius() && IsAlive())
 	{
 		StartAttackTimer();
@@ -130,10 +183,10 @@ void AEnemy::CancelSelect()
 void AEnemy::BeginPlay()
 {
 	Super::BeginPlay();
-	const FString NetModeStr = ToString(GetNetMode()); // ENetMode 用 ToString
+	const FString NetModeStr = ToString(GetNetMode()); // ENetMode 鐢?ToString
 	const FString RoleStr = UEnum::GetValueAsString(TEXT("Engine.ENetRole"), GetLocalRole());
 
-	UE_LOG(LogTemp, Warning, TEXT("[网络调试][敌人=%s] 模式=%s 角色权限=%s Auth=%d"),
+	UE_LOG(LogTemp, Warning, TEXT("[缃戠粶璋冭瘯][鏁屼汉=%s] 妯″紡=%s 瑙掕壊鏉冮檺=%s Auth=%d"),
 		*GetName(), *NetModeStr, *RoleStr, HasAuthority() ? 1 : 0);
 
 
@@ -155,21 +208,47 @@ void AEnemy::SpawnSoul()
 
 void AEnemy::Die()
 {
+	if (IsDead()) return;
+
 	Super::Die();
 	EnemyState = EEnemyState::EES_Dead;
 	ClearAttackTimer();
+	ClearPatrolTimer();
 	HideHealthBar();
 	SetLifeSpan(DeathLifeSpan);
 	GetCharacterMovement()->bOrientRotationToMovement = false;
+	GetCharacterMovement()->DisableMovement();
 	SpawnSoul();
+
+	if (EnemyController)
+	{
+		EnemyController->StopMovement();
+		if (UBrainComponent* BrainComponent = EnemyController->GetBrainComponent())
+		{
+			BrainComponent->StopLogic(TEXT("EnemyDead"));
+		}
+	}
 }
 
 void AEnemy::Attack()
 {
 	Super::Attack();
-	if (CombatTarget == nullptr) return;
-	EnemyState = EEnemyState::EES_Engaged;
-	PlayAttackMontage();
+	if (CombatTarget == nullptr || IsDead()) return;
+	if (EnemyController)
+	{
+		EnemyController->StopMovement();
+	}
+
+	const int32 AttackSection = PlayAttackMontage();
+	if (AttackSection >= 0)
+	{
+		EnemyState = EEnemyState::EES_Engaged;
+	}
+	else
+	{
+		// No valid attack montage section: keep AI from getting stuck in engaged state.
+		EnemyState = EEnemyState::EES_NoState;
+	}
 }
 
 bool AEnemy::CanAttack()
@@ -185,6 +264,7 @@ bool AEnemy::CanAttack()
 void AEnemy::AttackEnd()
 {
 	EnemyState = EEnemyState::EES_NoState;
+	if (IsUsingBehaviorTree()) return;
 	CheckCombatTarget();
 }
 
@@ -202,10 +282,20 @@ void AEnemy::HandleDamage(float DamageAmount)
 void AEnemy::InitializeEnemy()
 {
 	EnemyController = Cast<AAIController>(GetController());
-	GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
-	MoveToTarget(PatrolTarget);
 	HideHealthBar();
 	SpawnDefaultWeapon();
+
+	if (IsUsingBehaviorTree())
+	{
+		if (AEnemyAIController* BTController = Cast<AEnemyAIController>(EnemyController))
+		{
+			BTController->StartBehaviorTree(BehaviorTreeAsset, this);
+			return;
+		}
+	}
+
+	GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
+	MoveToTarget(PatrolTarget);
 }
 
 void AEnemy::CheckPatrolTarget()
@@ -348,6 +438,12 @@ void AEnemy::MoveToTarget(AActor* Target)
 
 AActor* AEnemy::ChoosePatrolTarget()
 {
+	if (PatrolTargets.Num() <= 0)
+	{
+		// Single-point patrol fallback (or null if designer didn't set any point).
+		return PatrolTarget;
+	}
+
 	TArray<AActor*> ValidTargets;
 	for (AActor* Target : PatrolTargets)
 	{
@@ -363,7 +459,7 @@ AActor* AEnemy::ChoosePatrolTarget()
 		const int32 TargetSelection = FMath::RandRange(0, NumPatrolTargets - 1);
 		return ValidTargets[TargetSelection];
 	}
-	return nullptr;
+	return PatrolTarget ? PatrolTarget : PatrolTargets[0];
 }
 
 void AEnemy::SpawnDefaultWeapon()
@@ -389,9 +485,56 @@ void AEnemy::PawnSeen(APawn* SeenPawn)
 	{
 		CombatTarget = SeenPawn;
 		ClearPatrolTimer();
-		ChaseTarget();
+		if (IsUsingBehaviorTree())
+		{
+			EnterChasingStateFromBT();
+			ShowHealthBar();
+		}
+		else
+		{
+			ChaseTarget();
+		}
 	}
 }
+
+bool AEnemy::CanAttackFromBT()
+{
+	return CanAttack();
+}
+
+void AEnemy::ExecuteAttackFromBT()
+{
+	Attack();
+}
+
+void AEnemy::EnterChasingStateFromBT()
+{
+	EnemyState = EEnemyState::EES_Chasing;
+	GetCharacterMovement()->MaxWalkSpeed = ChasingSpeed;
+}
+
+void AEnemy::EnterPatrollingStateFromBT()
+{
+	EnemyState = EEnemyState::EES_Patrolling;
+	GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
+}
+
+AActor* AEnemy::ChooseNextPatrolTarget()
+{
+	return ChoosePatrolTarget();
+}
+
+bool AEnemy::IsTargetOutsideCombatRangeFromBT()
+{
+	return IsOutsideCombatRadius();
+}
+
+void AEnemy::ClearCombatTargetFromBT()
+{
+	LoseInterest();
+	EnterPatrollingStateFromBT();
+}
+
 
 
 

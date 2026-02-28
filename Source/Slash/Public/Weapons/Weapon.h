@@ -57,6 +57,9 @@ protected:
 
 	void ExecuteGetHit(AActor* OtherActor);
 
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastCreateFields(const FVector_NetQuantize& FieldLocation);
+
 	UFUNCTION(BlueprintImplementableEvent)
 	void CreateFields(const FVector& FieldLocation);
 

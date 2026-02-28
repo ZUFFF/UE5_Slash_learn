@@ -12,6 +12,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 class UHealthBarComponent;
 class UPawnSensingComponent;
+class UBehaviorTree;
 
 
 UCLASS()
@@ -21,6 +22,7 @@ class SLASH_API AEnemy : public ABaseCharacter, public ITargetInterface
 
 public:
 	AEnemy();
+	bool IsUsingBehaviorTree() const { return bUseBehaviorTree && BehaviorTreeAsset != nullptr; }
 
 	/** <AActor> */
 	virtual void Tick(float DeltaTime) override;
@@ -38,6 +40,19 @@ public:
 	virtual void Select() override;
 	virtual void CancelSelect() override;
 	/** </ITargetInterface> */
+
+	// Behavior Tree accessors (for Task/Service use)
+	AActor* GetCombatTargetActor() const { return CombatTarget; }
+	bool IsDeadState() const { return EnemyState == EEnemyState::EES_Dead; }
+	bool CanAttackFromBT();
+	void ExecuteAttackFromBT();
+	void EnterChasingStateFromBT();
+	void EnterPatrollingStateFromBT();
+	AActor* GetCurrentPatrolTarget() const { return PatrolTarget; }
+	void SetCurrentPatrolTarget(AActor* NewPatrolTarget) { PatrolTarget = NewPatrolTarget; }
+	AActor* ChooseNextPatrolTarget();
+	bool IsTargetOutsideCombatRangeFromBT();
+	void ClearCombatTargetFromBT();
 
 protected:
 	/** <AActor> */
@@ -59,6 +74,7 @@ protected:
 private:
 
 	/** AI Behavior */
+	void SetEnemyState(EEnemyState NewState, const TCHAR* Reason);
 	void InitializeEnemy();
 	void CheckPatrolTarget();
 	void CheckCombatTarget();
@@ -143,6 +159,15 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = Combat)
 	float DeathLifeSpan = 8.f;
+
+	UPROPERTY(EditAnywhere, Category = "AI|BehaviorTree")
+	bool bUseBehaviorTree = true;
+
+	UPROPERTY(EditAnywhere, Category = "AI|BehaviorTree")
+	UBehaviorTree* BehaviorTreeAsset;
+
+	UPROPERTY(EditAnywhere, Category = "AI|Debug")
+	bool bEnableAIStateLog = true;
 
 	UPROPERTY(EditAnywhere, Category = Combat)
 	TSubclassOf<class ASoul> SoulClass;

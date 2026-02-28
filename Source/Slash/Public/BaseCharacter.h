@@ -31,6 +31,8 @@ protected:
 	virtual void Attack(const FInputActionValue& Value);
 	virtual void Die();
 	void DirectionalHitReact(const FVector& ImpactPoint);
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayHitReaction(const FVector_NetQuantize& ImpactPoint, const FVector_NetQuantize& HitterLocation, bool bCanReact);
 	virtual void HandleDamage(float DamageAmount);
 	void PlayHitSound(const FVector& ImpactPoint);
 	void SpawnHitParticles(const FVector& ImpactPoint);

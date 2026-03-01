@@ -26,6 +26,14 @@
 #include "Weapons/Projectile.h"
 #include "SlashAnimInstance.h"
 #include "Net/UnrealNetwork.h"
+#include "AbilitySystemComponent.h"
+#include "Abilities/GameplayAbility.h"
+#include "GameplayAbilitySpec.h"
+#include "GameplayEffect.h"
+#include "GAS/SlashAttributeSet.h"
+#include "GAS/GE_SlashInitAttributes.h"
+#include "GAS/GA_SlashAttack.h"
+#include "SlashPlayerState.h"
 
 
 // Sets default values
@@ -80,6 +88,11 @@ ASlashCharacter::ASlashCharacter()
 	AttachedProjectile->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	AttachedProjectile->SetupAttachment(GetRootComponent());
 	AttachedProjectile->SetVisibility(false);
+
+	AbilitySystemComponent = nullptr;
+	SlashAttributeSet = nullptr;
+	DefaultPrimaryAttributesEffect = UGE_SlashInitAttributes::StaticClass();
+	DefaultAttackAbilityClass = UGA_SlashAttack::StaticClass();
 
 }
 
@@ -191,6 +204,177 @@ void ASlashCharacter::ResumeAction()
 	}
 }
 
+UAbilitySystemComponent* ASlashCharacter::GetAbilitySystemComponent() const
+{
+	if (AbilitySystemComponent)
+	{
+		return AbilitySystemComponent;
+	}
+
+	if (const ASlashPlayerState* SlashPS = GetPlayerState<ASlashPlayerState>())
+	{
+		return SlashPS->GetAbilitySystemComponent();
+	}
+
+	return nullptr;
+}
+
+void ASlashCharacter::InitializeAbilitySystem()
+{
+	ASlashPlayerState* SlashPS = GetPlayerState<ASlashPlayerState>();
+	if (!SlashPS)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GAS][%s] SlashPlayerState missing. Set GameMode PlayerStateClass to SlashPlayerState."), *GetName());
+		return;
+	}
+
+	AbilitySystemComponent = SlashPS->GetAbilitySystemComponent();
+	SlashAttributeSet = SlashPS->GetSlashAttributeSet();
+
+	if (!AbilitySystemComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GAS][%s] ASC missing on SlashPlayerState."), *GetName());
+		return;
+	}
+
+	AbilitySystemComponent->InitAbilityActorInfo(SlashPS, this);
+}
+
+void ASlashCharacter::GrantStartupAbilities()
+{
+	if (!HasAuthority()) return;
+	if (!AbilitySystemComponent) return;
+	if (bStartupAbilitiesGranted) return;
+
+	TArray<TSubclassOf<UGameplayAbility>> AbilitiesToGrant = StartupAbilities;
+	if (DefaultAttackAbilityClass)
+	{
+		AbilitiesToGrant.AddUnique(DefaultAttackAbilityClass);
+	}
+
+	for (const TSubclassOf<UGameplayAbility>& AbilityClass : AbilitiesToGrant)
+	{
+		if (!AbilityClass) continue;
+
+		bool bAlreadyGranted = false;
+		for (const FGameplayAbilitySpec& ExistingSpec : AbilitySystemComponent->GetActivatableAbilities())
+		{
+			if (ExistingSpec.Ability && ExistingSpec.Ability->GetClass() == AbilityClass)
+			{
+				bAlreadyGranted = true;
+				break;
+			}
+		}
+		if (bAlreadyGranted)
+		{
+			continue;
+		}
+
+		AbilitySystemComponent->GiveAbility(FGameplayAbilitySpec(AbilityClass, 1, INDEX_NONE, this));
+	}
+
+	bStartupAbilitiesGranted = true;
+}
+
+void ASlashCharacter::ApplyStartupEffects()
+{
+	if (!HasAuthority()) return;
+	if (!AbilitySystemComponent) return;
+	if (bStartupEffectsApplied) return;
+
+	if (DefaultPrimaryAttributesEffect)
+	{
+		FGameplayEffectContextHandle EffectContext = AbilitySystemComponent->MakeEffectContext();
+		EffectContext.AddSourceObject(this);
+		const FGameplayEffectSpecHandle SpecHandle = AbilitySystemComponent->MakeOutgoingSpec(
+			DefaultPrimaryAttributesEffect,
+			1.f,
+			EffectContext
+		);
+		if (SpecHandle.IsValid())
+		{
+			AbilitySystemComponent->ApplyGameplayEffectSpecToSelf(*SpecHandle.Data.Get());
+		}
+	}
+
+	bStartupEffectsApplied = true;
+	if (SlashAttributeSet)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GAS][%s] InitAttr Health=%.1f MaxHealth=%.1f Stamina=%.1f MaxStamina=%.1f AttackPower=%.1f"),
+			*GetName(),
+			SlashAttributeSet->GetHealth(),
+			SlashAttributeSet->GetMaxHealth(),
+			SlashAttributeSet->GetStamina(),
+			SlashAttributeSet->GetMaxStamina(),
+			SlashAttributeSet->GetAttackPower());
+	}
+}
+
+bool ASlashCharacter::ActivateAbilityByClassInternal(TSubclassOf<UGameplayAbility> AbilityClass)
+{
+	if (!AbilitySystemComponent || !AbilityClass) return false;
+
+	const TArray<FGameplayAbilitySpec>& Specs = AbilitySystemComponent->GetActivatableAbilities();
+	for (const FGameplayAbilitySpec& Spec : Specs)
+	{
+		if (Spec.Ability && Spec.Ability->GetClass() == AbilityClass)
+		{
+			return AbilitySystemComponent->TryActivateAbility(Spec.Handle);
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[GAS][%s] Ability not granted: %s"),
+		*GetName(), *GetNameSafe(AbilityClass));
+	return false;
+}
+
+bool ASlashCharacter::TryActivateAbilityByClass(TSubclassOf<UGameplayAbility> AbilityClass)
+{
+	if (!AbilityClass || !AbilitySystemComponent) return false;
+
+	bool bAbilityGranted = false;
+	for (const FGameplayAbilitySpec& Spec : AbilitySystemComponent->GetActivatableAbilities())
+	{
+		if (Spec.Ability && Spec.Ability->GetClass() == AbilityClass)
+		{
+			bAbilityGranted = true;
+			break;
+		}
+	}
+
+	if (!bAbilityGranted)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GAS][%s] Ability spec missing for %s"),
+			*GetName(), *GetNameSafe(AbilityClass));
+		return false;
+	}
+
+	if (HasAuthority())
+	{
+		return ActivateAbilityByClassInternal(AbilityClass);
+	}
+
+	ServerTryActivateAbility(AbilityClass);
+	return true;
+}
+
+void ASlashCharacter::ServerTryActivateAbility_Implementation(TSubclassOf<UGameplayAbility> AbilityClass)
+{
+	ActivateAbilityByClassInternal(AbilityClass);
+}
+
+void ASlashCharacter::TriggerAttackFromAbility()
+{
+	if (HasAuthority())
+	{
+		ExecuteAttackAuthority();
+	}
+	else
+	{
+		ServerRequestAttack();
+	}
+}
+
 // Called when the game starts or when spawned
 void ASlashCharacter::BeginPlay()
 {
@@ -214,6 +398,12 @@ void ASlashCharacter::BeginPlay()
 	FAttachmentTransformRules TransformRules(EAttachmentRule::SnapToTarget, true);
 	AttachedProjectile->AttachToComponent(GetMesh(), TransformRules, FName("RightIndexSocket"));
 	FindNearestEnemy();
+	InitializeAbilitySystem();
+	if (HasAuthority())
+	{
+		GrantStartupAbilities();
+		ApplyStartupEffects();
+	}
 
 }
 
@@ -229,6 +419,9 @@ void ASlashCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 void ASlashCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	InitializeAbilitySystem();
+	GrantStartupAbilities();
+	ApplyStartupEffects();
 	UE_LOG(LogTemp, Warning, TEXT("[控制链][PossessedBy][PID=%d][%s] 控制器=%s"),
 		FPlatformProcess::GetCurrentProcessId(),
 		*GetName(),
@@ -239,10 +432,18 @@ void ASlashCharacter::PossessedBy(AController* NewController)
 void ASlashCharacter::OnRep_Controller()
 {
 	Super::OnRep_Controller();
+	InitializeAbilitySystem();
 	UE_LOG(LogTemp, Warning, TEXT("[控制链][OnRep_Controller][PID=%d][%s] 控制器=%s"),
 		FPlatformProcess::GetCurrentProcessId(),
 		*GetName(),
 		*GetNameSafe(GetController()));
+	InitializeSlashOverlay();
+}
+
+void ASlashCharacter::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	InitializeAbilitySystem();
 	InitializeSlashOverlay();
 }
 
@@ -258,12 +459,12 @@ void ASlashCharacter::InitializeSlashOverlay()
 		if (SlashHUD)
 		{
 			SlashOverlay = SlashHUD->GetSlashOverlay();
-			if (SlashOverlay && Attributes)
+			if (SlashOverlay)
 			{
-				SlashOverlay->SetHealthBarPercent(Attributes->GetHealthPercent());
-				SlashOverlay->SetStaminaPercent(1.f);
-				SlashOverlay->SetGold(0);
-				SlashOverlay->SetSouls(0);
+				SlashOverlay->SetHealthBarPercent(GetCurrentHealthPercentForHUD());
+				SlashOverlay->SetStaminaPercent(GetCurrentStaminaPercentForHUD());
+				SlashOverlay->SetGold(Attributes ? Attributes->GetGold() : 0);
+				SlashOverlay->SetSouls(Attributes ? Attributes->GetSouls() : 0);
 			}
 		}
 	}
@@ -398,6 +599,11 @@ void ASlashCharacter::Attack(const FInputActionValue& Value)
 	// 	EquippedWeapon->Fire(HitTarget, GetMesh(), FName("RightIndexSocket"));
 	// 	if (AttachedProjectile)AttachedProjectile->SetVisibility(false);
 	// }
+	if (DefaultAttackAbilityClass && TryActivateAbilityByClass(DefaultAttackAbilityClass))
+	{
+		return;
+	}
+
 	if (HasAuthority())
 	{
 		ExecuteAttackAuthority();
@@ -452,7 +658,7 @@ void ASlashCharacter::ExecuteAttackAuthority()
 void ASlashCharacter::ExecuteDodgeAuthority()
 {
 	if (ActionState != EActionState::EAS_Unoccupied) return;
-	if (!(Attributes && Attributes->GetStamina() > Attributes->GetDodgeCost())) return;
+	if (GetCurrentStamina() < DodgeStaminaCost) return;
 
 	ActionState = EActionState::EAS_Dodge;
 	const FVector LastInput = GetCharacterMovement()->GetLastInputVector();
@@ -461,7 +667,7 @@ void ASlashCharacter::ExecuteDodgeAuthority()
 		const FRotator NewRotation = UKismetMathLibrary::Conv_VectorToRotator(LastInput);
 		SetActorRotation(NewRotation);
 	}
-	Attributes->UseStamina(Attributes->GetDodgeCost());
+	ConsumeStamina(DodgeStaminaCost);
 	MulticastPlayDodgeMontage();
 }
 
@@ -808,16 +1014,17 @@ void ASlashCharacter::Arm()
 void ASlashCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	if (Attributes && SlashOverlay)
+	if (HasAuthority())
 	{
-		if (HasAuthority())
-		{
-			Attributes->RegenStamina(DeltaTime);
-		}
-		SlashOverlay->SetHealthBarPercent(Attributes->GetHealthPercent());
-		SlashOverlay->SetStaminaPercent(Attributes->GetStaminaPercent());
-		SlashOverlay->SetGold(Attributes->GetGold());
-		SlashOverlay->SetSouls(Attributes->GetSouls());
+		RegenStaminaGAS(DeltaTime);
+	}
+
+	if (SlashOverlay)
+	{
+		SlashOverlay->SetHealthBarPercent(GetCurrentHealthPercentForHUD());
+		SlashOverlay->SetStaminaPercent(GetCurrentStaminaPercentForHUD());
+		SlashOverlay->SetGold(Attributes ? Attributes->GetGold() : 0);
+		SlashOverlay->SetSouls(Attributes ? Attributes->GetSouls() : 0);
 	}
 	
 	if (MoveState == ECharacterMoveState::ECMS_Locked)
@@ -873,9 +1080,82 @@ bool ASlashCharacter::IsUnoccupied()
 	return ActionState == EActionState::EAS_Unoccupied;
 }
 
+float ASlashCharacter::GetCurrentHealthPercentForHUD() const
+{
+	if (SlashAttributeSet)
+	{
+		const float MaxHealth = FMath::Max(SlashAttributeSet->GetMaxHealth(), 1.f);
+		return SlashAttributeSet->GetHealth() / MaxHealth;
+	}
+	return Attributes ? Attributes->GetHealthPercent() : 0.f;
+}
+
+float ASlashCharacter::GetCurrentStaminaPercentForHUD() const
+{
+	const float MaxStamina = GetCurrentMaxStamina();
+	if (MaxStamina <= KINDA_SMALL_NUMBER) return 0.f;
+	return GetCurrentStamina() / MaxStamina;
+}
+
+float ASlashCharacter::GetCurrentStamina() const
+{
+	if (SlashAttributeSet)
+	{
+		return SlashAttributeSet->GetStamina();
+	}
+	return Attributes ? static_cast<float>(Attributes->GetStamina()) : 0.f;
+}
+
+float ASlashCharacter::GetCurrentMaxStamina() const
+{
+	if (SlashAttributeSet)
+	{
+		return SlashAttributeSet->GetMaxStamina();
+	}
+	return 100.f;
+}
+
+void ASlashCharacter::ConsumeStamina(float Cost)
+{
+	if (Cost <= 0.f) return;
+
+	if (SlashAttributeSet)
+	{
+		const float NewStamina = FMath::Clamp(SlashAttributeSet->GetStamina() - Cost, 0.f, SlashAttributeSet->GetMaxStamina());
+		SlashAttributeSet->SetStamina(NewStamina);
+		return;
+	}
+
+	if (Attributes)
+	{
+		Attributes->UseStamina(Cost);
+	}
+}
+
+void ASlashCharacter::RegenStaminaGAS(float DeltaTime)
+{
+	if (DeltaTime <= 0.f) return;
+
+	if (SlashAttributeSet)
+	{
+		const float NewStamina = FMath::Clamp(
+			SlashAttributeSet->GetStamina() + StaminaRegenPerSecond * DeltaTime,
+			0.f,
+			SlashAttributeSet->GetMaxStamina()
+		);
+		SlashAttributeSet->SetStamina(NewStamina);
+		return;
+	}
+
+	if (Attributes)
+	{
+		Attributes->RegenStamina(DeltaTime);
+	}
+}
+
 float ASlashCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
-	HandleDamage(DamageAmount);
+	HandleDamage(DamageAmount, DamageCauser);
 	SetHUDHealth();
 	return DamageAmount;
 }
@@ -884,7 +1164,7 @@ void ASlashCharacter::SetHUDHealth()
 {
 	if (SlashOverlay)
 	{
-		SlashOverlay->SetHealthBarPercent(Attributes->GetHealthPercent());
+		SlashOverlay->SetHealthBarPercent(GetCurrentHealthPercentForHUD());
 	}
 }
 

@@ -166,7 +166,28 @@ void AEnemy::Tick(float DeltaTime)
 
 float AEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
-	HandleDamage(DamageAmount);
+	const float BeforeHealthPercent = GetResolvedHealthPercent();
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[Damage][%s] TakeDamage In Damage=%.2f Instigator=%s Causer=%s Auth=%d HP%%Before=%.2f"),
+		*GetName(),
+		DamageAmount,
+		*GetNameSafe(EventInstigator),
+		*GetNameSafe(DamageCauser),
+		HasAuthority() ? 1 : 0,
+		BeforeHealthPercent
+	);
+
+	HandleDamage(DamageAmount, DamageCauser);
+	const float AfterHealthPercent = GetResolvedHealthPercent();
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[Damage][%s] TakeDamage After HP%%=%.2f"),
+		*GetName(),
+		AfterHealthPercent
+	);
 
 	// Server-authoritative death gate: in BT mode, drive death through blackboard/task;
 	// in non-BT mode, use direct Die() fallback.
@@ -227,7 +248,15 @@ void AEnemy::GetHit_Implementation(const FVector& ImpactPoint, AActor* Hitter)
 {
 	if (IsDead()) return;
 
-	UE_LOG(LogTemp, Warning, TEXT("enemy's gethit being called"));
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[GetHit][%s] Enemy::GetHit Called Hitter=%s Impact=%s Auth=%d"),
+		*GetName(),
+		*GetNameSafe(Hitter),
+		*ImpactPoint.ToCompactString(),
+		HasAuthority() ? 1 : 0
+	);
 	// Stop current attack montage first so hit-react montage can take over immediately.
 	StopAttackMontage();
 	Super::GetHit_Implementation(ImpactPoint, Hitter);
@@ -372,13 +401,13 @@ void AEnemy::AttackEnd()
 	CheckCombatTarget();
 }
 
-void AEnemy::HandleDamage(float DamageAmount)
+void AEnemy::HandleDamage(float DamageAmount, AActor* DamageCauser)
 {
-	Super::HandleDamage(DamageAmount);
+	Super::HandleDamage(DamageAmount, DamageCauser);
 
-	if (Attributes && HealthBarWidget)
+	if (HealthBarWidget)
 	{
-		HealthBarWidget->SetHealthPercent(Attributes->GetHealthPercent());
+		HealthBarWidget->SetHealthPercent(GetResolvedHealthPercent());
 	}
 }
 
@@ -644,7 +673,7 @@ void AEnemy::ExecuteAttackFromBT()
 
 bool AEnemy::ShouldDieFromBT() const
 {
-	return Attributes && !Attributes->IsAlive();
+	return !IsAlive();
 }
 
 void AEnemy::ExecuteDeathFromBT()

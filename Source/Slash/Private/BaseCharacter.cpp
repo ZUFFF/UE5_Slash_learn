@@ -1,13 +1,19 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "BaseCharacter.h"
 #include "Components/BoxComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Weapons/Weapon.h"
 #include "AttributeComponents.h"
 #include "Components/CapsuleComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
+#include "AbilitySystemInterface.h"
+#include "AbilitySystemComponent.h"
+#include "GAS/SlashAttributeSet.h"
+#include "GAS/GE_SlashDamage.h"
+#include "GameplayTagContainer.h"
 // Sets default values
 ABaseCharacter::ABaseCharacter()
 {
@@ -16,6 +22,14 @@ ABaseCharacter::ABaseCharacter()
 
 	Attributes = CreateDefaultSubobject<UAttributeComponents>(TEXT("Attributes"));
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECollisionChannel::ECC_Camera, ECollisionResponse::ECR_Ignore);
+
+	// Melee hit windows rely on montage notifies and socket transforms.
+	// Force pose ticking on server so dedicated server can evaluate these reliably.
+	if (USkeletalMeshComponent* MeshComp = GetMesh())
+	{
+		MeshComp->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		MeshComp->bEnableUpdateRateOptimizations = false;
+	}
 
 }
 
@@ -36,6 +50,16 @@ void ABaseCharacter::GetHit_Implementation(const FVector& ImpactPoint, AActor* H
 {
 	const bool bCanReact = IsAlive() && Hitter != nullptr;
 	const FVector HitterLocation = Hitter ? Hitter->GetActorLocation() : GetActorLocation();
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[GetHit][%s] Called Hitter=%s CanReact=%d Auth=%d Impact=%s"),
+		*GetName(),
+		*GetNameSafe(Hitter),
+		bCanReact ? 1 : 0,
+		HasAuthority() ? 1 : 0,
+		*ImpactPoint.ToCompactString()
+	);
 
 	if (HasAuthority())
 	{
@@ -159,16 +183,52 @@ void ABaseCharacter::SpawnHitParticles(const FVector& ImpactPoint)
 	}
 }
 
-void ABaseCharacter::HandleDamage(float DamageAmount)
+void ABaseCharacter::HandleDamage(float DamageAmount, AActor* DamageCauser)
 {
-	if (Attributes)
+	if (UAbilitySystemComponent* TargetASC = ResolveAbilitySystemComponent())
+	{
+		UAbilitySystemComponent* SourceASC = nullptr;
+
+		AActor* SourceActor = DamageCauser;
+		if (SourceActor && SourceActor->GetOwner())
+		{
+			SourceActor = SourceActor->GetOwner();
+		}
+		if (const IAbilitySystemInterface* SourceASI = Cast<IAbilitySystemInterface>(SourceActor))
+		{
+			SourceASC = SourceASI->GetAbilitySystemComponent();
+		}
+
+		UAbilitySystemComponent* SpecASC = SourceASC ? SourceASC : TargetASC;
+		FGameplayEffectContextHandle EffectContext = SpecASC->MakeEffectContext();
+		EffectContext.AddSourceObject(DamageCauser ? DamageCauser : this);
+
+		const FGameplayEffectSpecHandle SpecHandle = SpecASC->MakeOutgoingSpec(
+			UGE_SlashDamage::StaticClass(),
+			1.f,
+			EffectContext
+		);
+
+		if (SpecHandle.IsValid())
+		{
+			static const FGameplayTag DataDamageTag = FGameplayTag::RequestGameplayTag(FName("Data.Damage"), false);
+			if (DataDamageTag.IsValid())
+			{
+				SpecHandle.Data->SetSetByCallerMagnitude(DataDamageTag, DamageAmount);
+			}
+
+			TargetASC->ApplyGameplayEffectSpecToSelf(*SpecHandle.Data.Get());
+		}
+	}
+	else if (Attributes)
 	{
 		Attributes->ReceiveDamage(DamageAmount);
 	}
-	UE_LOG(LogTemp, Warning, TEXT("[伤害结算][%s] Auth=%d HP%%=%.2f"),
-	*GetName(), HasAuthority() ? 1 : 0, Attributes ? Attributes->GetHealthPercent() : -1.f);
 
+	UE_LOG(LogTemp, Warning, TEXT("[伤害结算][%s] Auth=%d HP%%=%.2f"),
+		*GetName(), HasAuthority() ? 1 : 0, GetResolvedHealthPercent());
 }
+
 
 void ABaseCharacter::PlayMontageSection(UAnimMontage* Montage, const FName& SectionName)
 {
@@ -260,10 +320,43 @@ bool ABaseCharacter::CanAttack()
 	return false;
 }
 
-bool ABaseCharacter::IsAlive()
+bool ABaseCharacter::IsAlive() const
 {
-	return Attributes && Attributes->IsAlive();
+    if (const USlashAttributeSet* SlashAttrs = ResolveSlashAttributeSet())
+    {
+        return SlashAttrs->GetHealth() > 0.f;
+    }
+    return Attributes && Attributes->IsAlive();
 }
+
+float ABaseCharacter::GetResolvedHealthPercent() const
+{
+    if (const USlashAttributeSet* SlashAttrs = ResolveSlashAttributeSet())
+    {
+        const float MaxHealth = FMath::Max(SlashAttrs->GetMaxHealth(), 1.f);
+        return SlashAttrs->GetHealth() / MaxHealth;
+    }
+    return Attributes ? Attributes->GetHealthPercent() : -1.f;
+}
+
+UAbilitySystemComponent* ABaseCharacter::ResolveAbilitySystemComponent() const
+{
+    if (const IAbilitySystemInterface* AbilityInterface = Cast<IAbilitySystemInterface>(this))
+    {
+        return AbilityInterface->GetAbilitySystemComponent();
+    }
+    return nullptr;
+}
+
+const USlashAttributeSet* ABaseCharacter::ResolveSlashAttributeSet() const
+{
+    if (const UAbilitySystemComponent* ASC = ResolveAbilitySystemComponent())
+    {
+        return ASC->GetSet<USlashAttributeSet>();
+    }
+    return nullptr;
+}
+
 
 void ABaseCharacter::AttackEnd()
 {

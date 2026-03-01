@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "InputActionValue.h"
+#include "AbilitySystemInterface.h"
 #include "CharacterTypes.h"
 #include "BaseCharacter.h"
 #include "Interfaces/PickupInterface.h"
@@ -23,9 +24,13 @@ class USlashOverlap;
 class ASoul;
 class ATreasure;
 class AEnemy;
+class UAbilitySystemComponent;
+class UGameplayAbility;
+class UGameplayEffect;
+class USlashAttributeSet;
 
 UCLASS()
-class SLASH_API ASlashCharacter : public ABaseCharacter, public IPickupInterface
+class SLASH_API ASlashCharacter : public ABaseCharacter, public IPickupInterface, public IAbilitySystemInterface
 {
 	GENERATED_BODY()
 
@@ -38,11 +43,13 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_Controller() override;
+	virtual void OnRep_PlayerState() override;
 
 	// Called to bind functionality to input
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	virtual void Jump() override;
 	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	FORCEINLINE ECharacterState GetCharacterState() const { return CharacterState; }
 
@@ -67,6 +74,21 @@ public:
 
 	// �ָ�����
 	void ResumeAction();
+
+	UFUNCTION(BlueprintCallable, Category = "GAS")
+	void InitializeAbilitySystem();
+
+	UFUNCTION(BlueprintCallable, Category = "GAS")
+	void GrantStartupAbilities();
+
+	UFUNCTION(BlueprintCallable, Category = "GAS")
+	bool TryActivateAbilityByClass(TSubclassOf<UGameplayAbility> AbilityClass);
+
+	UFUNCTION(BlueprintCallable, Category = "GAS")
+	void TriggerAttackFromAbility();
+
+	UFUNCTION(BlueprintCallable, Category = "GAS")
+	void ApplyStartupEffects();
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -150,6 +172,9 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void ServerSetAiming(bool bNewAiming);
 
+	UFUNCTION(Server, Reliable)
+	void ServerTryActivateAbility(TSubclassOf<UGameplayAbility> AbilityClass);
+
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPlayAttackMontage();
 
@@ -167,6 +192,7 @@ protected:
 	void ExecuteDodgeAuthority();
 	void ExecuteToggleLockAuthority();
 	void ExecuteSetAimingAuthority(bool bNewAiming);
+	bool ActivateAbilityByClassInternal(TSubclassOf<UGameplayAbility> AbilityClass);
 
 	bool bCanDisarm();
 	bool bCanArm();
@@ -197,6 +223,12 @@ protected:
 private:
 
 	bool IsUnoccupied();
+	float GetCurrentHealthPercentForHUD() const;
+	float GetCurrentStaminaPercentForHUD() const;
+	float GetCurrentStamina() const;
+	float GetCurrentMaxStamina() const;
+	void ConsumeStamina(float Cost);
+	void RegenStaminaGAS(float DeltaTime);
 
 	FTimerHandle HitReactionTimer;
 
@@ -211,6 +243,12 @@ private:
 
 	UPROPERTY(EditAnywhere)
 	float RunSpeed = 500.f;
+
+	UPROPERTY(EditAnywhere, Category = "GAS|Combat")
+	float DodgeStaminaCost = 14.f;
+
+	UPROPERTY(EditAnywhere, Category = "GAS|Combat")
+	float StaminaRegenPerSecond = 8.f;
 
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Replicated, meta = (AllowPrivateAccess = "true"))
 	ECharacterState CharacterState = ECharacterState::ECS_Unequipped;
@@ -256,6 +294,24 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category ="Actor Attributes")
 	USlashOverlap* SlashOverlay;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	UAbilitySystemComponent* AbilitySystemComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	USlashAttributeSet* SlashAttributeSet;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	TArray<TSubclassOf<UGameplayAbility>> StartupAbilities;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UGameplayAbility> DefaultAttackAbilityClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UGameplayEffect> DefaultPrimaryAttributesEffect;
+
+	bool bStartupAbilitiesGranted = false;
+	bool bStartupEffectsApplied = false;
 
 	UPROPERTY()
 	class ASlashHUD* HUD;

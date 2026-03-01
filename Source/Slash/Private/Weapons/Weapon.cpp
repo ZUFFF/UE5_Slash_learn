@@ -127,6 +127,16 @@ AProjectile* AWeapon::SpawnProjectile()
 
 void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[HitTrace][%s] OnBoxOverlap Other=%s Owner=%s Auth=%d"),
+		*GetName(),
+		*GetNameSafe(OtherActor),
+		*GetNameSafe(GetOwner()),
+		HasAuthority() ? 1 : 0
+	);
+
 	//if (ActorIsSameType(OtherActor)) return;
 
 	//FHitResult BoxHit;
@@ -155,6 +165,7 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 
 	if (!HasAuthority())
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Abort: NoAuthority"), *GetName());
 		if (bShowBoxDebug)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: NoAuthority"), *GetName());
@@ -164,6 +175,7 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 
 	if (!OtherActor || OtherActor == GetOwner())
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Abort: InvalidOrOwner Other=%s"), *GetName(), *GetNameSafe(OtherActor));
 		if (bShowBoxDebug)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: InvalidOrOwner"), *GetName());
@@ -173,6 +185,7 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 
 	if (ActorIsSameType(OtherActor))
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Abort: SameType Other=%s"), *GetName(), *GetNameSafe(OtherActor));
 		if (bShowBoxDebug)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: SameType OwnerTagEnemy=%d OtherTagEnemy=%d"),
@@ -185,6 +198,7 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 
 	if (!OtherActor->GetClass()->ImplementsInterface(UHitInterface::StaticClass()))
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Abort: TargetNoHitInterface Target=%s"), *GetName(), *GetNameSafe(OtherActor));
 		if (bShowBoxDebug)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: NotHitInterface Target=%s"),
@@ -196,8 +210,11 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 	WeaponBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	const FVector FieldLocation = SweepResult.bBlockingHit ? SweepResult.ImpactPoint : GetActorLocation();
 	MulticastCreateFields(FieldLocation);
+	UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] ApplyDamage Target=%s Damage=%.2f"), *GetName(), *GetNameSafe(OtherActor), Damage);
 	UGameplayStatics::ApplyDamage(OtherActor, Damage, GetInstigator()->GetController(), this, UDamageType::StaticClass());
+	UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Execute_GetHit Target=%s"), *GetName(), *GetNameSafe(OtherActor));
 	ExecuteGetHit(OtherActor);
+	UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Execute_GetHit Done Target=%s"), *GetName(), *GetNameSafe(OtherActor));
 
 	if (bShowBoxDebug)
 	{
@@ -239,13 +256,34 @@ void AWeapon::ExecuteGetHit(FHitResult& BoxHit)
 
 void AWeapon::ExecuteGetHit(AActor* OtherActor)
 {
+	if (!OtherActor)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] ExecuteGetHit Abort: OtherActor null"), *GetName());
+		return;
+	}
+
+	const bool bImplements = OtherActor->GetClass()->ImplementsInterface(UHitInterface::StaticClass());
 	IHitInterface* HitInterface = Cast<IHitInterface>(OtherActor);
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[HitTrace][%s] ExecuteGetHit Target=%s Implements=%d CastOK=%d"),
+		*GetName(),
+		*GetNameSafe(OtherActor),
+		bImplements ? 1 : 0,
+		HitInterface ? 1 : 0
+	);
 	if (HitInterface)
 	{
 		AActor* HitterActor = GetOwner();
 		if (!HitterActor) HitterActor = GetInstigator();
 		if (!HitterActor) HitterActor = this;
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] Execute_GetHit Call Hitter=%s"), *GetName(), *GetNameSafe(HitterActor));
 		HitInterface->Execute_GetHit(OtherActor, GetActorLocation(), HitterActor);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitTrace][%s] ExecuteGetHit Abort: Cast<IHitInterface> failed"), *GetName());
 	}
 }
 

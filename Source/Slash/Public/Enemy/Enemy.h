@@ -67,7 +67,7 @@ protected:
 	virtual void Attack() override;
 	virtual bool CanAttack() override;
 	virtual void AttackEnd() override;
-	virtual void HandleDamage(float DamageAmount) override;
+	virtual void HandleDamage(float DamageAmount, AActor* DamageCauser = nullptr) override;
 	/** </ABaseCharacter> */
 
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, ReplicatedUsing = OnRep_EnemyState)

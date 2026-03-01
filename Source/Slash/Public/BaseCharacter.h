@@ -12,6 +12,8 @@
 class AWeapon;
 class UAttributeComponents;
 class UAnimMontage;
+class UAbilitySystemComponent;
+class USlashAttributeSet;
 
 UCLASS()
 class SLASH_API ABaseCharacter : public ACharacter, public IHitInterface
@@ -33,12 +35,13 @@ protected:
 	void DirectionalHitReact(const FVector& ImpactPoint);
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayHitReaction(const FVector_NetQuantize& ImpactPoint, const FVector_NetQuantize& HitterLocation, bool bCanReact);
-	virtual void HandleDamage(float DamageAmount);
+	virtual void HandleDamage(float DamageAmount, AActor* DamageCauser = nullptr);
 	void PlayHitSound(const FVector& ImpactPoint);
 	void SpawnHitParticles(const FVector& ImpactPoint);
 	void DisableCapsule();
 	virtual bool CanAttack();
-	bool IsAlive();
+	bool IsAlive() const;
+	float GetResolvedHealthPercent() const;
 	void PlayHitReactMontage(const FName& SectionName);
 	virtual int32 PlayAttackMontage();
 	virtual int32 PlayDeathMontage();
@@ -112,4 +115,8 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = Combat)
 	TArray<FName> DeathMontageSections;
+
+protected:
+	UAbilitySystemComponent* ResolveAbilitySystemComponent() const;
+	const USlashAttributeSet* ResolveSlashAttributeSet() const;
 };

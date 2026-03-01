@@ -23,7 +23,10 @@ void AEnemyAIController::StartBehaviorTree(UBehaviorTree* InBehaviorTree, AEnemy
 	BBComp = GetBlackboardComponent();
 	if (!BBComp) return;
 
-	BBComp->SetValueAsVector(HomeLocationKeyName, ControlledEnemy->GetActorLocation());
+	const FVector SpawnLocation = ControlledEnemy->GetActorLocation();
+	BBComp->SetValueAsVector(HomeLocationKeyName, SpawnLocation);
+	// Defensive default: avoid PatrolLocation staying at (0,0,0) when query/asset setup is incomplete.
+	BBComp->SetValueAsVector(PatrolLocationKeyName, SpawnLocation);
 	BBComp->SetValueAsObject(TargetActorKeyName, ControlledEnemy->GetCombatTargetActor());
 	BBComp->SetValueAsBool(CanAttackKeyName, false);
 	BBComp->SetValueAsBool(IsDeadKeyName, ControlledEnemy->IsDeadState());
@@ -38,4 +41,3 @@ void AEnemyAIController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
 }
-

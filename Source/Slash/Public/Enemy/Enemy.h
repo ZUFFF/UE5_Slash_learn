@@ -23,6 +23,7 @@ class SLASH_API AEnemy : public ABaseCharacter, public ITargetInterface
 public:
 	AEnemy();
 	bool IsUsingBehaviorTree() const { return bUseBehaviorTree && BehaviorTreeAsset != nullptr; }
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** <AActor> */
 	virtual void Tick(float DeltaTime) override;
@@ -44,8 +45,10 @@ public:
 	// Behavior Tree accessors (for Task/Service use)
 	AActor* GetCombatTargetActor() const { return CombatTarget; }
 	bool IsDeadState() const { return EnemyState == EEnemyState::EES_Dead; }
+	bool ShouldDieFromBT() const;
 	bool CanAttackFromBT();
 	void ExecuteAttackFromBT();
+	void ExecuteDeathFromBT();
 	void EnterChasingStateFromBT();
 	void EnterPatrollingStateFromBT();
 	AActor* GetCurrentPatrolTarget() const { return PatrolTarget; }
@@ -67,8 +70,11 @@ protected:
 	virtual void HandleDamage(float DamageAmount) override;
 	/** </ABaseCharacter> */
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere)
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, ReplicatedUsing = OnRep_EnemyState)
 	EEnemyState EnemyState;
+
+	UFUNCTION()
+	void OnRep_EnemyState();
 
 
 private:
@@ -168,6 +174,14 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "AI|Debug")
 	bool bEnableAIStateLog = true;
+
+	UPROPERTY(EditAnywhere, Category = "AI|Debug")
+	bool bEnableAIRealtimeStateLog = false;
+
+	UPROPERTY(EditAnywhere, Category = "AI|Debug", meta=(ClampMin="0.1"))
+	float AIRealtimeStateLogInterval = 0.5f;
+
+	float AIRealtimeStateLogAccumulator = 0.f;
 
 	UPROPERTY(EditAnywhere, Category = Combat)
 	TSubclassOf<class ASoul> SoulClass;

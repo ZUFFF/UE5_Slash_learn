@@ -10,6 +10,7 @@
 #include "NiagaraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMeshSocket.h"
+#include "Net/UnrealNetwork.h"
 
 AWeapon::AWeapon()
 {
@@ -29,11 +30,18 @@ AWeapon::AWeapon()
 	BoxTraceEnd->SetupAttachment(GetRootComponent());
 }
 
+void AWeapon::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AWeapon, bEmbersActive);
+}
+
 void AWeapon::BeginPlay()
 {
 	Super::BeginPlay();
 
 	WeaponBox->OnComponentBeginOverlap.AddDynamic(this, &AWeapon::OnBoxOverlap);
+	ApplyEmbersState();
 }
 void AWeapon::Equip(USceneComponent* InParent, FName InSocketName, AActor* NewOwner, APawn* NewInstigator)
 {
@@ -48,10 +56,41 @@ void AWeapon::Equip(USceneComponent* InParent, FName InSocketName, AActor* NewOw
 
 void AWeapon::DeactivateEmbers()
 {
-	if (ItemEffect)
+	SetEmbersActive(false);
+}
+
+void AWeapon::SetEmbersActive(bool bNewActive)
+{
+	if (HasAuthority())
+	{
+		bEmbersActive = bNewActive;
+	}
+	else
+	{
+		// Local fallback for non-network scenarios.
+		bEmbersActive = bNewActive;
+	}
+
+	ApplyEmbersState();
+}
+
+void AWeapon::ApplyEmbersState()
+{
+	if (!ItemEffect) return;
+
+	if (bEmbersActive)
+	{
+		ItemEffect->Activate(true);
+	}
+	else
 	{
 		ItemEffect->Deactivate();
 	}
+}
+
+void AWeapon::OnRep_EmbersActive()
+{
+	ApplyEmbersState();
 }
 
 void AWeapon::DisableSphereCollision()
@@ -101,13 +140,72 @@ void AWeapon::OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Oth
 	//	ExecuteGetHit(BoxHit);
 	//	CreateFields(BoxHit.ImpactPoint);
 	//}
-	if (!HasAuthority()) return;
-	if (OtherActor == GetOwner() || ActorIsSameType(OtherActor)) return;
+	if (bShowBoxDebug)
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[WeaponHitTrace][%s] Overlap Other=%s Owner=%s Auth=%d"),
+			*GetName(),
+			*GetNameSafe(OtherActor),
+			*GetNameSafe(GetOwner()),
+			HasAuthority() ? 1 : 0
+		);
+	}
+
+	if (!HasAuthority())
+	{
+		if (bShowBoxDebug)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: NoAuthority"), *GetName());
+		}
+		return;
+	}
+
+	if (!OtherActor || OtherActor == GetOwner())
+	{
+		if (bShowBoxDebug)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: InvalidOrOwner"), *GetName());
+		}
+		return;
+	}
+
+	if (ActorIsSameType(OtherActor))
+	{
+		if (bShowBoxDebug)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: SameType OwnerTagEnemy=%d OtherTagEnemy=%d"),
+				*GetName(),
+				GetOwner() && GetOwner()->ActorHasTag(TEXT("Enemy")) ? 1 : 0,
+				OtherActor->ActorHasTag(TEXT("Enemy")) ? 1 : 0);
+		}
+		return;
+	}
+
+	if (!OtherActor->GetClass()->ImplementsInterface(UHitInterface::StaticClass()))
+	{
+		if (bShowBoxDebug)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] Skip: NotHitInterface Target=%s"),
+				*GetName(), *GetNameSafe(OtherActor));
+		}
+		return;
+	}
+
 	WeaponBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	const FVector FieldLocation = SweepResult.bBlockingHit ? SweepResult.ImpactPoint : GetActorLocation();
 	MulticastCreateFields(FieldLocation);
 	UGameplayStatics::ApplyDamage(OtherActor, Damage, GetInstigator()->GetController(), this, UDamageType::StaticClass());
 	ExecuteGetHit(OtherActor);
+
+	if (bShowBoxDebug)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[WeaponHitTrace][%s] ApplyDamage+ExecuteGetHit Target=%s Damage=%.2f"),
+			*GetName(),
+			*GetNameSafe(OtherActor),
+			Damage);
+	}
 	if (GetOwner()->ActorHasTag(TEXT("EngageableTarget")))
 	{
 		ASlashCharacter* Character = Cast< ASlashCharacter>(GetOwner());
@@ -132,7 +230,10 @@ void AWeapon::ExecuteGetHit(FHitResult& BoxHit)
 	IHitInterface* HitInterface = Cast<IHitInterface>(BoxHit.GetActor());
 	if (HitInterface)
 	{
-		HitInterface->Execute_GetHit(BoxHit.GetActor(), BoxHit.ImpactPoint, GetOwner());
+		AActor* HitterActor = GetOwner();
+		if (!HitterActor) HitterActor = GetInstigator();
+		if (!HitterActor) HitterActor = this;
+		HitInterface->Execute_GetHit(BoxHit.GetActor(), BoxHit.ImpactPoint, HitterActor);
 	}
 }
 
@@ -141,7 +242,10 @@ void AWeapon::ExecuteGetHit(AActor* OtherActor)
 	IHitInterface* HitInterface = Cast<IHitInterface>(OtherActor);
 	if (HitInterface)
 	{
-		HitInterface->Execute_GetHit(OtherActor, GetActorLocation(), GetOwner());
+		AActor* HitterActor = GetOwner();
+		if (!HitterActor) HitterActor = GetInstigator();
+		if (!HitterActor) HitterActor = this;
+		HitInterface->Execute_GetHit(OtherActor, GetActorLocation(), HitterActor);
 	}
 }
 

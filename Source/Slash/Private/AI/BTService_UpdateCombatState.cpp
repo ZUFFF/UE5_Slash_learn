@@ -32,6 +32,6 @@ void UBTService_UpdateCombatState::TickNode(UBehaviorTreeComponent& OwnerComp, u
 	}
 
 	BBComp->SetValueAsObject(AEnemyAIController::TargetActorKeyName, CombatTarget);
-	BBComp->SetValueAsBool(AEnemyAIController::IsDeadKeyName, Enemy->IsDeadState());
+	BBComp->SetValueAsBool(AEnemyAIController::IsDeadKeyName, Enemy->IsDeadState() || Enemy->ShouldDieFromBT());
 	BBComp->SetValueAsBool(AEnemyAIController::CanAttackKeyName, Enemy->CanAttackFromBT());
 }

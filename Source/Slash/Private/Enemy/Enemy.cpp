@@ -15,9 +15,11 @@
 #include "AIController.h"
 #include "BrainComponent.h"
 #include "AI/EnemyAIController.h"
+#include "BehaviorTree/BlackboardComponent.h"
 #include "Soul.h"
 #include "Weapons/Weapon.h"
 #include "Slash/Slash.h"
+#include "Net/UnrealNetwork.h"
 
 // Fill out your copyright notice in the Description page of Project Settings.
 
@@ -50,8 +52,55 @@ AEnemy::AEnemy()
 	EnemyState = EEnemyState::EES_NoState;
 }
 
+void AEnemy::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AEnemy, EnemyState);
+}
+
+void AEnemy::OnRep_EnemyState()
+{
+	if (!bEnableAIStateLog) return;
+
+	const UEnum* EnemyStateEnum = StaticEnum<EEnemyState>();
+	const FString StateStr = EnemyStateEnum
+		? EnemyStateEnum->GetNameStringByValue(static_cast<int64>(EnemyState))
+		: TEXT("Unknown");
+
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[AIStateRep][%s] State=%s NetMode=%s Auth=%d"),
+		*GetName(),
+		*StateStr,
+		*ToString(GetNetMode()),
+		HasAuthority() ? 1 : 0
+	);
+}
+
 void AEnemy::SetEnemyState(EEnemyState NewState, const TCHAR* Reason)
 {
+	// Replicated state must be server-authored; client-side writes cause state divergence
+	// (e.g. Dead being overwritten back to NoState by local anim notify).
+	if (!HasAuthority()) return;
+
+	// Death is terminal for this actor instance; do not allow state rollback.
+	if (EnemyState == EEnemyState::EES_Dead && NewState != EEnemyState::EES_Dead)
+	{
+		if (bEnableAIStateLog)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("[AIState][%s] Ignore %s while Dead. Reason=%s"),
+				*GetName(),
+				*StaticEnum<EEnemyState>()->GetNameStringByValue(static_cast<int64>(NewState)),
+				Reason ? Reason : TEXT("Unknown")
+			);
+		}
+		return;
+	}
+
 	if (EnemyState == NewState) return;
 
 	if (bEnableAIStateLog)
@@ -62,12 +111,13 @@ void AEnemy::SetEnemyState(EEnemyState NewState, const TCHAR* Reason)
 		UE_LOG(
 			LogTemp,
 			Warning,
-			TEXT("[AI鐘舵€乚[%s] %s -> %s 鍘熷洜=%s NetMode=%s"),
+			TEXT("[AIState][%s] %s -> %s Reason=%s NetMode=%s Auth=%d"),
 			*GetName(),
 			*OldState,
 			*NextState,
 			Reason ? Reason : TEXT("Unknown"),
-			*ToString(GetNetMode())
+			*ToString(GetNetMode()),
+			HasAuthority() ? 1 : 0
 		);
 	}
 
@@ -77,6 +127,30 @@ void AEnemy::SetEnemyState(EEnemyState NewState, const TCHAR* Reason)
 void AEnemy::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	if (bEnableAIRealtimeStateLog)
+	{
+		AIRealtimeStateLogAccumulator += DeltaTime;
+		if (AIRealtimeStateLogAccumulator >= AIRealtimeStateLogInterval)
+		{
+			AIRealtimeStateLogAccumulator = 0.f;
+			const UEnum* EnemyStateEnum = StaticEnum<EEnemyState>();
+			const FString StateStr = EnemyStateEnum
+				? EnemyStateEnum->GetNameStringByValue(static_cast<int64>(EnemyState))
+				: TEXT("Unknown");
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("[AIStateLive][%s] State=%s NetMode=%s Auth=%d Target=%s"),
+				*GetName(),
+				*StateStr,
+				*ToString(GetNetMode()),
+				HasAuthority() ? 1 : 0,
+				CombatTarget ? *CombatTarget->GetName() : TEXT("None")
+			);
+		}
+	}
+
 	if (IsDead()) return;
 	if (IsUsingBehaviorTree()) return;
 
@@ -93,6 +167,27 @@ void AEnemy::Tick(float DeltaTime)
 float AEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
 	HandleDamage(DamageAmount);
+
+	// Server-authoritative death gate: in BT mode, drive death through blackboard/task;
+	// in non-BT mode, use direct Die() fallback.
+	if (ShouldDieFromBT())
+	{
+		if (IsUsingBehaviorTree())
+		{
+			if (AEnemyAIController* BTController = Cast<AEnemyAIController>(EnemyController))
+			{
+				if (UBlackboardComponent* BBComp = BTController->GetBlackboardComponent())
+				{
+					BBComp->SetValueAsBool(AEnemyAIController::IsDeadKeyName, true);
+				}
+			}
+		}
+		else if (!IsDead())
+		{
+			Die();
+		}
+		return DamageAmount;
+	}
 
 	if (EventInstigator)
 	{
@@ -111,7 +206,7 @@ float AEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AC
 
 	if (IsInsideAttackRadius())
 	{
-		EnemyState = EEnemyState::EES_Attacking;
+		SetEnemyState(EEnemyState::EES_Attacking, TEXT("TakeDamage_InAttackRadius"));
 	}
 	else if (IsOutsideAttackRadius())
 	{
@@ -133,13 +228,14 @@ void AEnemy::GetHit_Implementation(const FVector& ImpactPoint, AActor* Hitter)
 	if (IsDead()) return;
 
 	UE_LOG(LogTemp, Warning, TEXT("enemy's gethit being called"));
+	// Stop current attack montage first so hit-react montage can take over immediately.
+	StopAttackMontage();
 	Super::GetHit_Implementation(ImpactPoint, Hitter);
 	if (IsDead()) return;
 	if(!IsDead())ShowHealthBar();
 	ClearPatrolTimer();
 	ClearAttackTimer();
 	SetWeaponCollisionEnabled(ECollisionEnabled::NoCollision);
-	StopAttackMontage();
 
 	if (IsUsingBehaviorTree()) return;
 
@@ -186,8 +282,8 @@ void AEnemy::BeginPlay()
 	const FString NetModeStr = ToString(GetNetMode()); // ENetMode 鐢?ToString
 	const FString RoleStr = UEnum::GetValueAsString(TEXT("Engine.ENetRole"), GetLocalRole());
 
-	UE_LOG(LogTemp, Warning, TEXT("[缃戠粶璋冭瘯][鏁屼汉=%s] 妯″紡=%s 瑙掕壊鏉冮檺=%s Auth=%d"),
-		*GetName(), *NetModeStr, *RoleStr, HasAuthority() ? 1 : 0);
+	UE_LOG(LogTemp, Warning, TEXT("[EnemyInit][%s] NetMode=%s Role=%s Auth=%d UseBT=%d"),
+		*GetName(), *NetModeStr, *RoleStr, HasAuthority() ? 1 : 0, IsUsingBehaviorTree() ? 1 : 0);
 
 
 	if (PawnSensing) PawnSensing->OnSeePawn.AddDynamic(this, &AEnemy::PawnSeen);
@@ -210,12 +306,17 @@ void AEnemy::Die()
 {
 	if (IsDead()) return;
 
+	// Lethal hit can arrive while attack montage is playing; stop it first
+	// so death montage/state can take over immediately.
+	StopAttackMontage();
+
 	Super::Die();
-	EnemyState = EEnemyState::EES_Dead;
+	SetEnemyState(EEnemyState::EES_Dead, TEXT("Die"));
 	ClearAttackTimer();
 	ClearPatrolTimer();
 	HideHealthBar();
-	SetLifeSpan(DeathLifeSpan);
+	// Keep corpse for debugging death montage/state-machine transitions.
+	SetLifeSpan(0.f);
 	GetCharacterMovement()->bOrientRotationToMovement = false;
 	GetCharacterMovement()->DisableMovement();
 	SpawnSoul();
@@ -242,12 +343,12 @@ void AEnemy::Attack()
 	const int32 AttackSection = PlayAttackMontage();
 	if (AttackSection >= 0)
 	{
-		EnemyState = EEnemyState::EES_Engaged;
+		SetEnemyState(EEnemyState::EES_Engaged, TEXT("Attack_PlayMontage"));
 	}
 	else
 	{
 		// No valid attack montage section: keep AI from getting stuck in engaged state.
-		EnemyState = EEnemyState::EES_NoState;
+		SetEnemyState(EEnemyState::EES_NoState, TEXT("Attack_NoValidMontageSection"));
 	}
 }
 
@@ -263,7 +364,10 @@ bool AEnemy::CanAttack()
 
 void AEnemy::AttackEnd()
 {
-	EnemyState = EEnemyState::EES_NoState;
+	if (!HasAuthority()) return;
+	if (IsDead()) return;
+
+	SetEnemyState(EEnemyState::EES_NoState, TEXT("AttackEnd"));
 	if (IsUsingBehaviorTree()) return;
 	CheckCombatTarget();
 }
@@ -289,6 +393,8 @@ void AEnemy::InitializeEnemy()
 	{
 		if (AEnemyAIController* BTController = Cast<AEnemyAIController>(EnemyController))
 		{
+			SetEnemyState(EEnemyState::EES_Patrolling, TEXT("BT_Initialize"));
+			GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
 			BTController->StartBehaviorTree(BehaviorTreeAsset, this);
 			return;
 		}
@@ -356,14 +462,14 @@ void AEnemy::LoseInterest()
 
 void AEnemy::StartPatrolling()
 {
-	EnemyState = EEnemyState::EES_Patrolling;
+	SetEnemyState(EEnemyState::EES_Patrolling, TEXT("StartPatrolling"));
 	GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
 	MoveToTarget(PatrolTarget);
 }
 
 void AEnemy::ChaseTarget()
 {
-	EnemyState = EEnemyState::EES_Chasing;
+	SetEnemyState(EEnemyState::EES_Chasing, TEXT("ChaseTarget"));
 	GetCharacterMovement()->MaxWalkSpeed = ChasingSpeed;
 	MoveToTarget(CombatTarget);
 }
@@ -410,7 +516,7 @@ void AEnemy::ClearPatrolTimer()
 
 void AEnemy::StartAttackTimer()
 {
-	EnemyState = EEnemyState::EES_Attacking;
+	SetEnemyState(EEnemyState::EES_Attacking, TEXT("StartAttackTimer"));
 	const float AttackTime = FMath::RandRange(AttackMin, AttackMax);
 	GetWorldTimerManager().SetTimer(AttackTimer, this, &AEnemy::Attack, AttackTime);
 }
@@ -440,36 +546,65 @@ AActor* AEnemy::ChoosePatrolTarget()
 {
 	if (PatrolTargets.Num() <= 0)
 	{
-		// Single-point patrol fallback (or null if designer didn't set any point).
 		return PatrolTarget;
 	}
 
-	TArray<AActor*> ValidTargets;
+	TArray<AActor*> UniqueTargets;
 	for (AActor* Target : PatrolTargets)
 	{
-		if (Target != PatrolTarget)
+		if (IsValid(Target))
 		{
-			ValidTargets.AddUnique(Target);
+			UniqueTargets.AddUnique(Target);
 		}
 	}
 
-	const int32 NumPatrolTargets = ValidTargets.Num();
-	if (NumPatrolTargets > 0)
+	if (UniqueTargets.Num() <= 0)
 	{
-		const int32 TargetSelection = FMath::RandRange(0, NumPatrolTargets - 1);
-		return ValidTargets[TargetSelection];
+		return PatrolTarget;
 	}
-	return PatrolTarget ? PatrolTarget : PatrolTargets[0];
+
+	// Prefer changing destination when possible.
+	TArray<AActor*> CandidateTargets = UniqueTargets;
+	if (IsValid(PatrolTarget))
+	{
+		CandidateTargets.Remove(PatrolTarget);
+	}
+	if (CandidateTargets.Num() <= 0)
+	{
+		CandidateTargets = UniqueTargets;
+	}
+
+	const int32 Selection = FMath::RandRange(0, CandidateTargets.Num() - 1);
+	AActor* NextTarget = CandidateTargets[Selection];
+	if (bEnableAIStateLog)
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[AIPatrol][%s] Current=%s Next=%s Candidates=%d"),
+			*GetName(),
+			PatrolTarget ? *PatrolTarget->GetName() : TEXT("None"),
+			NextTarget ? *NextTarget->GetName() : TEXT("None"),
+			CandidateTargets.Num()
+		);
+	}
+	return NextTarget;
 }
 
 void AEnemy::SpawnDefaultWeapon()
 {
+	if (!HasAuthority()) return;
+	if (EquippedWeapon != nullptr) return;
+
 	UWorld* World = GetWorld();
 	if (World && WeaponClass)
 	{
 		AWeapon* DefaultWeapon = World->SpawnActor<AWeapon>(WeaponClass);
-		DefaultWeapon->Equip(GetMesh(), FName("RightHandSocket"), this, this);
-		EquippedWeapon = DefaultWeapon;
+		if (DefaultWeapon)
+		{
+			DefaultWeapon->Equip(GetMesh(), FName("RightHandSocket"), this, this);
+			EquippedWeapon = DefaultWeapon;
+		}
 	}
 }
 
@@ -507,15 +642,27 @@ void AEnemy::ExecuteAttackFromBT()
 	Attack();
 }
 
+bool AEnemy::ShouldDieFromBT() const
+{
+	return Attributes && !Attributes->IsAlive();
+}
+
+void AEnemy::ExecuteDeathFromBT()
+{
+	if (!ShouldDieFromBT()) return;
+	if (IsDead()) return;
+	Die();
+}
+
 void AEnemy::EnterChasingStateFromBT()
 {
-	EnemyState = EEnemyState::EES_Chasing;
+	SetEnemyState(EEnemyState::EES_Chasing, TEXT("BT_EnterChasing"));
 	GetCharacterMovement()->MaxWalkSpeed = ChasingSpeed;
 }
 
 void AEnemy::EnterPatrollingStateFromBT()
 {
-	EnemyState = EEnemyState::EES_Patrolling;
+	SetEnemyState(EEnemyState::EES_Patrolling, TEXT("BT_EnterPatrolling"));
 	GetCharacterMovement()->MaxWalkSpeed = PatrollingSpeed;
 }
 
@@ -534,6 +681,8 @@ void AEnemy::ClearCombatTargetFromBT()
 	LoseInterest();
 	EnterPatrollingStateFromBT();
 }
+
+
 
 
 

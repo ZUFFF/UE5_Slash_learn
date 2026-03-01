@@ -33,6 +33,7 @@ class SLASH_API AWeapon : public AMyItem
 
 public:
 	AWeapon();
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	void Equip(USceneComponent* InParent, FName InSocketName, AActor* NewOwner, APawn* NewInstigator);
 	void DeactivateEmbers();
 	void DisableSphereCollision();
@@ -47,6 +48,11 @@ public:
 	void Fire(const FVector& HitTarget, USkeletalMeshComponent* OwnerMesh, FName SocketName);
 protected:
 	virtual void BeginPlay() override;
+	void SetEmbersActive(bool bNewActive);
+	void ApplyEmbersState();
+
+	UFUNCTION()
+	void OnRep_EmbersActive();
 
 	UFUNCTION()
 	void OnBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
@@ -67,6 +73,9 @@ protected:
 	UAnimationAsset* FireAnimation;
 private:
 	void BoxTrace(FHitResult& BoxHit);
+
+	UPROPERTY(ReplicatedUsing = OnRep_EmbersActive, VisibleAnywhere, Category = "Weapon|FX")
+	bool bEmbersActive = true;
 
 	UPROPERTY(EditAnywhere, Category = "Weapon Properties")
 	FVector BoxTraceExtent = FVector(5.f);
